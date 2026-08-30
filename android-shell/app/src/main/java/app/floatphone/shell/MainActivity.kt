@@ -28,7 +28,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 
 /**
- * Float 小手机安卓壳：全屏 WebView 直接加载线上站点。
+ * Float FLOAT安卓壳：全屏 WebView 直接加载线上站点。
  * 网页每次部署即时生效，本壳只负责原生能力（推送长连接、文件上下行、外链）。
  */
 class MainActivity : AppCompatActivity() {
