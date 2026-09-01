@@ -33,6 +33,7 @@ type PushConfigRow = {
 type EncryptedPayload = { v: 1; iv: string; tag: string; ct: string };
 
 const OWNER_ID = "owner";
+const SHELL_ENDPOINT_PREFIX = "shell:";
 const MAX_PAYLOAD_BYTES = 900_000;
 const ALLOWED_JOB_KINDS = new Set(["followup", "reply_bailout", "timed_task", "shortcut_resume"]);
 const SHORTCUT_RESULT_MODES = new Set(["none", "text", "image"]);
@@ -103,6 +104,31 @@ const utf8 = (value: string) => new TextEncoder().encode(value);
 async function keyFingerprint(value: string): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", utf8(value)));
   return bytesToB64url(digest);
+}
+
+/** 安卓壳合成订阅不走 Web Push，改向 Realtime 频道 shellpush:owner 广播。 */
+async function broadcastShellNotify(
+  supabaseUrl: string,
+  headers: Record<string, string>,
+  payload: Record<string, unknown>,
+): Promise<boolean> {
+  try {
+    const response = await fetch(`${supabaseUrl}/realtime/v1/api/broadcast`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        messages: [{
+          topic: `shellpush:${OWNER_ID}`,
+          event: "notify",
+          payload,
+        }],
+      }),
+    });
+    await response.text().catch(() => undefined);
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -497,6 +523,8 @@ Deno.serve(async (request: Request) => {
     if (subscriptions.length === 0) {
       return { delivered: false, push: { sent: 0, total: 0, error: "个人云还没有任何离线推送订阅。" } };
     }
+    const webSubs = subscriptions.filter(subscription => !subscription.endpoint.startsWith(SHELL_ENDPOINT_PREFIX));
+    const shellSubs = subscriptions.filter(subscription => subscription.endpoint.startsWith(SHELL_ENDPOINT_PREFIX));
     const requestedOrigin = cleanText(request.headers.get("x-ai-phone-origin"), 300);
     const siteOrigin = requestedOrigin.startsWith("https://") ? requestedOrigin.replace(/\/$/, "") : "";
     const subject = siteOrigin || "mailto:push@ai-phone.local";
@@ -523,7 +551,16 @@ Deno.serve(async (request: Request) => {
     });
     let sent = 0;
     const errors: string[] = [];
-    for (const subscription of subscriptions) {
+    if (shellSubs.length > 0) {
+      const ok = await broadcastShellNotify(supabaseUrl, restHeaders, {
+        title: `运行「${command.action_name}」`,
+        body: "角色请求执行一条已授权的快捷动作，打开小手机查看。",
+        url: "/",
+      });
+      if (ok) sent += shellSubs.length;
+      else errors.push("shell broadcast failed");
+    }
+    for (const subscription of webSubs) {
       try {
         const status = await sendWebPushRaw(subscription, payload, {
           publicKey: config.vapid_public_key,
@@ -1027,9 +1064,20 @@ $CRON$)`);
         tag: `personal-push-test-${Date.now()}`,
         url: "/",
       });
+      const webSubs = subscriptions.filter(subscription => !subscription.endpoint.startsWith(SHELL_ENDPOINT_PREFIX));
+      const shellSubs = subscriptions.filter(subscription => subscription.endpoint.startsWith(SHELL_ENDPOINT_PREFIX));
       let sent = 0;
       const errors: string[] = [];
-      for (const subscription of subscriptions) {
+      if (shellSubs.length > 0) {
+        const ok = await broadcastShellNotify(supabaseUrl, restHeaders, {
+          title: "小手机",
+          body: "个人 Supabase 离线推送已连通。",
+          url: "/",
+        });
+        if (ok) sent += shellSubs.length;
+        else errors.push("shell broadcast failed");
+      }
+      for (const subscription of webSubs) {
         try {
           const status = await sendWebPushRaw(subscription, payload, {
             publicKey: config.vapid_public_key,

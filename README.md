@@ -128,6 +128,19 @@ SUPABASE_ANON_KEY=your-anon-key
 **设置 → 微信接入**中添加。云端与本地使用相同的角色运行包，微信消息、离线回复、
 快捷动作结果和来电留痕会按因果顺序合并回小手机。
 
+### 安卓壳离线推送（自部署）
+
+国行安卓收不到 Web Push。仓库自带 `android-shell/`：打一个全屏 WebView APK，
+用前台服务连你个人云的 Realtime，杀后台也能弹系统通知。完整步骤见
+[`android-shell/README.md`](./android-shell/README.md)。最短路径：
+
+1. 部署网站（`NEXT_PUBLIC_SELF_HOSTED_MODE=true`）；
+2. GitHub Actions 工作流 **Build Android Shell APK**，变量 `SHELL_SITE_URL` 填站点地址；
+3. 安装 APK 后到 **设置 → 云服务部署** 勾选离线推送；
+4. 聊天信息页创建「长时间没消息时」或「固定时间后」规则，并允许系统通知。
+
+需要重新打包 1.1+ 的壳：旧版只会去连站点联机库，连不上个人云。
+
 ### iOS 屏幕速聊（辅助触控双击）
 
 屏幕速聊是现实桥的一个 iOS 入口：双击辅助触控悬浮球后，快捷指令截取当前屏幕，

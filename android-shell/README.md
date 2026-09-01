@@ -89,23 +89,36 @@ base64 -w0 shell.keystore   # 得到一长串 base64
 android-shell/
 ├── app/src/main/java/app/floatphone/shell/
 │   ├── MainActivity.kt   # 全屏 WebView：站内导航/外链/文件选择/下载/返回键
-│   ├── PushService.kt    # 前台服务：借 WebView Cookie 取配置 → WS 长连接订阅 shellpush:<userId>
+│   ├── PushService.kt    # 前台服务：个人云 configurePush 或站点 config → WS 订阅 shellpush:<userId>
 │   └── BootReceiver.kt   # 开机自启
 └── ...gradle 工程
 ```
 
 - 壳的 UA 追加了 ` FloatShell/<版本>`，网页可借 `window.AndroidShell`
-  或 UA 识别壳环境；桥上有 `getVersion()` / `openAppSettings()` /
-  `requestIgnoreBatteryOptimization()` 三个方法。
-- 推送服务首次连上后会向站点注册一条合成订阅（endpoint `shell:<userId>`），
-  用途是让离线消息排期的「账号已订阅」门控放行；服务端对它只做
-  Realtime 广播，不做 Web Push 投递。
+  或 UA 识别壳环境；桥上有 `getVersion()` / `configurePush()` /
+  `openAppSettings()` / `requestIgnoreBatteryOptimization()` 四个方法。
+- 自部署个人云：网页把用户自己的 Supabase 地址交给 `configurePush`，
+  壳直连该项目的 Realtime 频道 `shellpush:owner`，并登记合成订阅
+  `shell:owner`。旧壳（1.0）只会去连站点联机库，自部署收不到离线消息，
+  需要重新打包 1.1+。
+- 推送服务连上后会向个人云（或站点回退通道）登记合成订阅 `shell:<userId>`，
+  让离线消息排期的「账号已订阅」门控放行；服务端只做 Realtime 广播，
+  不做 Web Push 投递。
+- 官方托管（站点已配 Supabase）仍可走原来的 `/api/online/config` 回退。
 - 壳内设置页的「离线推送」开关由壳自动接管（显示为已开启且不可关），
   Web Push 在 WebView 里本来就不可用。
 
 ## 服务端前提
 
-- Supabase 项目已按 `docs/push-supabase.sql` 配好离线推送（pg_cron + 边缘函数）。
-- `supabase/functions/push-generate/index.ts` 需要是包含 shellpush 广播的最新版
-  （改动后需重新部署边缘函数）。
-- Realtime 广播用 service key 直接调 HTTP API，无需额外建表或改配置。
+自部署（`NEXT_PUBLIC_SELF_HOSTED_MODE=true`）请走**个人云**，不要指望给站点填 `SUPABASE_URL` 来收离线消息：
+
+1. 把网站部署到 Netlify / Vercel，用 GitHub Actions 按上面步骤打 APK，`SHELL_SITE_URL` 填你的站点。
+2. 安装 APK，打开后到 **设置 → 云服务部署**，用自己的 Supabase Access Token 创建个人云并勾选「离线推送」。
+3. 到某个角色的聊天信息页打开「离线推送与定时消息」，创建「长时间没消息时」或「固定时间后」规则。
+4. 允许通知、关掉电池优化（见上文）。设置页点「测试」：杀掉后台，约 6 秒后应收到系统通知。
+
+角色之后就会按规则在随机/定时时间主动发消息；生成在个人云的 `push-generate` 上完成，壳的前台服务负责弹系统通知。
+
+个人云改动后若测试按钮失败，到云服务部署里**重新部署一次离线推送**（会更新边缘函数）。
+
+官方托管站点若已按 `docs/push-supabase.sql` 配好站点级离线推送，壳仍兼容那条旧链路。

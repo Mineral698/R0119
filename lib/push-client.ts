@@ -8,6 +8,12 @@ import {
     personalPushFetch,
     PERSONAL_PUSH_SW_SCOPE,
 } from "./personal-push-cloud";
+import { isSelfHostedModeEnabled } from "./self-hosting";
+import {
+    isShellPushBridgeReady,
+    SHELL_PUSH_OWNER_ID,
+    syncShellPushNativeConfig,
+} from "./shell-push-bridge";
 
 export type OfflinePushState = "unsupported" | "off" | "on";
 
@@ -103,6 +109,38 @@ export function isShellEnvironment(): boolean {
     return typeof navigator !== "undefined" && navigator.userAgent.includes("FloatShell/");
 }
 
+export { isShellPushBridgeReady };
+
+/**
+ * 自部署安卓壳：把个人云 Realtime 参数交给原生层，并在个人云登记合成订阅
+ * `shell:owner`。没有这条订阅时，定时/随机主动消息的门控不会放行，
+ * 服务端也不会向壳广播。站点级（非自部署）仍由原生 PushService 自行登记。
+ */
+export async function ensureShellPushChannel(): Promise<{ ok: boolean; error?: string }> {
+    if (!isShellEnvironment()) return { ok: true };
+    if (!isPersonalPushCloudActive()) {
+        return { ok: false, error: "请先到「设置 → 云服务部署」部署个人云离线推送。" };
+    }
+    try {
+        syncShellPushNativeConfig();
+        const saveResponse = await personalPushFetch("subscribe", {
+            method: "POST",
+            body: JSON.stringify({
+                endpoint: `shell:${SHELL_PUSH_OWNER_ID}`,
+                keys: { p256dh: "shell", auth: "shell" },
+            }),
+        });
+        const saveData = await saveResponse.json().catch(() => ({})) as { ok?: boolean; error?: string };
+        if (!saveResponse.ok || !saveData.ok) {
+            return { ok: false, error: saveData.error || "安卓壳推送订阅保存失败。" };
+        }
+        markAccountPushSubscribed(true);
+        return { ok: true };
+    } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : "安卓壳推送通道注册失败。" };
+    }
+}
+
 function isPushSupported(): boolean {
     return typeof window !== "undefined"
         && "serviceWorker" in navigator
@@ -185,6 +223,7 @@ async function subscribeRegistration(
 
 /** 给个人 Supabase 建立独立 SW 订阅；主 PWA 订阅保留给现实桥/快捷指令，互不覆盖。 */
 export async function ensurePersonalPushSubscription(): Promise<{ ok: boolean; error?: string }> {
+    if (isShellEnvironment()) return ensureShellPushChannel();
     if (!isPersonalPushCloudActive()) return { ok: false, error: "个人离线推送尚未启用。" };
     const registration = await getPersonalPushRegistration(true);
     if (!registration) return { ok: false, error: "个人推送 Service Worker 注册失败。" };
@@ -210,6 +249,11 @@ export async function ensurePersonalPushSubscription(): Promise<{ ok: boolean; e
 }
 
 export async function getOfflinePushState(): Promise<OfflinePushState> {
+    if (isShellEnvironment()) {
+        if (isPersonalPushCloudActive()) return "on";
+        if (isSelfHostedModeEnabled()) return "off";
+        return (await hasAccountPushSubscription()) ? "on" : "off";
+    }
     if (!isPushSupported()) return "unsupported";
     if (isPersonalPushCloudActive()) {
         const personalRegistration = await getPersonalPushRegistration(false);
@@ -229,7 +273,7 @@ export async function getOfflinePushState(): Promise<OfflinePushState> {
 
 export async function enableOfflinePush(): Promise<{ ok: boolean; error?: string }> {
     if (isShellEnvironment()) {
-        return { ok: false, error: "App 版自带推送通道，无需在此开启；保持系统通知权限开启即可收到离线消息。" };
+        return ensureShellPushChannel();
     }
     if (!isPushSupported()) {
         return { ok: false, error: "当前环境不支持系统推送。iOS 请先「添加到主屏幕」，再从主屏幕图标打开开启。" };

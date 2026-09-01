@@ -25,8 +25,9 @@ import { loadCharacters } from "@/lib/character-storage";
 import { triggerImmediatePost } from "@/lib/moments-engine";
 import type { Character } from "@/lib/character-types";
 import { requestNotificationPermission } from "@/lib/browser-notification";
-import { disableOfflinePush, enableOfflinePush, getOfflinePushState, isShellEnvironment, loadPushQuietHours, savePushQuietHours, sendTestOfflinePush, type OfflinePushState } from "@/lib/push-client";
+import { disableOfflinePush, enableOfflinePush, ensureShellPushChannel, getOfflinePushState, isShellEnvironment, isShellPushBridgeReady, loadPushQuietHours, savePushQuietHours, sendTestOfflinePush, type OfflinePushState } from "@/lib/push-client";
 import { isPersonalPushCloudActive, setPersonalPushCloudScheduled } from "@/lib/personal-push-cloud";
+import { isSelfHostedModeEnabled } from "@/lib/self-hosting";
 import { loadPushCloudScheduled, savePushCloudScheduled } from "@/lib/cloud-deploy-status";
 import { armIdleReconnectBailout, armTimedWakeBailout, cancelBailoutKey, cancelBailoutPrefix } from "@/lib/push-bailout-client";
 import { loadTimedWakeSchedules, makeTimedWakeId, removeTimedWakeSchedule, saveTimedWakeSchedule, type TimedWakeSchedule } from "@/lib/timed-wake-storage";
@@ -1199,6 +1200,12 @@ function OfflinePushSettingsPage({ onBack }: { onBack: () => void }) {
         setPersonalCloudActive(isPersonalPushCloudActive());
         void getOfflinePushState().then(setOfflinePushState);
         refreshTimedSchedules();
+        if (isShellEnvironment()) {
+            void ensureShellPushChannel().then(() => {
+                setPersonalCloudActive(isPersonalPushCloudActive());
+                return getOfflinePushState();
+            }).then(setOfflinePushState);
+        }
     }, []);
 
     const handleOfflinePushToggle = async (enabled: boolean) => {
@@ -1389,11 +1396,11 @@ function OfflinePushSettingsPage({ onBack }: { onBack: () => void }) {
                                     <span className="menu-desc">关掉后台后仍由系统推送通知（本设备）</span>
                                 </div>
                                 <div className="menu-right flex items-center gap-2">
-                                    {(offlinePushState === "on" || isShellApp) && (
+                                    {(offlinePushState === "on" || (isShellApp && !isSelfHostedModeEnabled())) && (
                                         <button className="ui-btn ui-btn-outline py-1 px-2 ts-11" style={{ whiteSpace: "nowrap" }} onClick={() => void handleOfflinePushTest()} disabled={offlinePushBusy}>测试</button>
                                     )}
                                     <Toggle
-                                        checked={offlinePushState === "on" || isShellApp}
+                                        checked={offlinePushState === "on" || (isShellApp && !isSelfHostedModeEnabled())}
                                         disabled={offlinePushBusy || isShellApp || offlinePushState === "unsupported"}
                                         onChange={enabled => void handleOfflinePushToggle(enabled)}
                                     />
@@ -1434,7 +1441,11 @@ function OfflinePushSettingsPage({ onBack }: { onBack: () => void }) {
                             )}
                         </div>
                         <p className="menu-group-desc mx-2">
-                            {offlinePushHint || (isShellApp
+                            {offlinePushHint || (isShellApp && isSelfHostedModeEnabled() && !personalCloudActive
+                                ? "自部署安卓壳要先完成「设置 → 云服务部署」（勾选离线推送）。部署后角色才能在随机/定时时间主动发消息，杀后台也能弹系统通知。"
+                                : isShellApp && personalCloudActive && !isShellPushBridgeReady()
+                                ? "网页已连上个人云，但当前安卓壳版本过旧，杀后台后收不到系统通知。请按仓库 android-shell/README 重新打包安装 APK。"
+                                : isShellApp
                                 ? "App 版自带推送通道，已自动接管离线推送；保持系统通知权限开启即可，可点「测试」验证。"
                                 : offlinePushState === "unsupported" ? "当前环境不支持。iOS 请先添加到主屏幕，从主屏幕打开后再开启。" : "")}
                         </p>
