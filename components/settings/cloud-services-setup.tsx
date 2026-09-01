@@ -24,11 +24,12 @@ import {
     syncAllWeixinBotRuntimesToCloud,
 } from "@/lib/weixin-cloud-sync";
 import { connectPersonalPushCloud, deployPersonalPushCloud, isPersonalPushCloudActive } from "@/lib/personal-push-cloud";
-import { ensurePersonalPushSubscription, getOfflinePushState, markAccountPushSubscribed } from "@/lib/push-client";
+import { ensurePersonalPushSubscription, getOfflinePushState, isShellEnvironment, markAccountPushSubscribed } from "@/lib/push-client";
 import { getWeixinCloudDeployedAt, markWeixinCloudDeployed, savePushCloudScheduled, saveWeixinCloudScheduled } from "@/lib/cloud-deploy-status";
 import { Input, Select } from "@/components/ui/form";
 
 const SUPABASE_TOKENS_URL = "https://supabase.com/dashboard/account/tokens";
+const PERSONAL_CLOUD_PROJECT_NAME = "AI Phone Personal Cloud";
 
 /** 设置页「云服务部署」独立条目的整页形态。 */
 export function CloudServicesPage() {
@@ -42,6 +43,7 @@ export function CloudServicesPage() {
 }
 
 type OrganizationOption = { id: string; slug: string; name: string };
+type ProjectOption = { ref: string; name: string; organizationId: string };
 
 function smartRegionForCurrentTimeZone(): "americas" | "emea" | "apac" {
     const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
@@ -81,6 +83,7 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
     const [weixinDeployed, setWeixinDeployed] = useState(false);
     const [token, setToken] = useState("");
     const [organizations, setOrganizations] = useState<OrganizationOption[]>([]);
+    const [projects, setProjects] = useState<ProjectOption[]>([]);
     const [selectedOrganizationSlug, setSelectedOrganizationSlug] = useState("");
     const [selectedRef, setSelectedRef] = useState("");
     const [scopeBackup, setScopeBackup] = useState(true);
@@ -119,17 +122,37 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
             const configuredRef = projectRefFromUrl(config.url);
             const managedRef = config.managedProjectRef === configuredRef ? configuredRef : "";
             if (managedRef) {
-                // 本应用创建过的专用项目允许原地重新部署；旧版手填/误选项目没有标记，
-                // 一律走新建流程，绝不把这次发布写回已有业务库。
+                // 本机还记着上次创建的专用项目：原地更新函数，不新建、不改名。
                 setSelectedRef(managedRef);
                 setOrganizations([]);
+                setProjects([]);
                 setSelectedOrganizationSlug(config.managedOrganizationSlug || "");
             } else {
-                const data = await callSupabaseAdmin<{ organizations: OrganizationOption[] }>({ action: "organizations", token });
+                const data = await callSupabaseAdmin<{
+                    organizations: OrganizationOption[];
+                    projects?: ProjectOption[];
+                }>({ action: "organizations", token });
                 if (data.organizations.length === 0) throw new Error("该 Supabase 账号下没有可用组织。");
+                const listedProjects = Array.isArray(data.projects) ? data.projects : [];
                 setOrganizations(data.organizations);
-                setSelectedOrganizationSlug(data.organizations.length === 1 ? data.organizations[0].slug : "");
-                setSelectedRef("");
+                setProjects(listedProjects);
+                const dedicated = listedProjects.filter(project => project.name === PERSONAL_CLOUD_PROJECT_NAME);
+                const only = dedicated.length === 1 ? dedicated[0] : undefined;
+                const onlyOrg = only
+                    ? data.organizations.find(org => org.id === only.organizationId)
+                    : undefined;
+                if (only) {
+                    // 账号里已经有同名个人云：接上它，不要再创建、更不要让用户去删。
+                    setSelectedRef(only.ref);
+                    setSelectedOrganizationSlug(onlyOrg?.slug || data.organizations[0]?.slug || "");
+                } else {
+                    const defaultOrg = data.organizations.length === 1 ? data.organizations[0] : undefined;
+                    const inDefault = defaultOrg
+                        ? dedicated.find(project => project.organizationId === defaultOrg.id)
+                        : undefined;
+                    setSelectedOrganizationSlug(defaultOrg?.slug || "");
+                    setSelectedRef(inDefault?.ref || "");
+                }
             }
             setScopeBackup(true);
             setScopeWeixin(true);
@@ -258,7 +281,7 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                 setProgress("部署离线推送…");
                 const pushWasEnabled = await getOfflinePushState() === "on";
                 await deployPersonalPushCloud(token);
-                if (pushWasEnabled) {
+                if (isShellEnvironment() || pushWasEnabled) {
                     const subscription = await ensurePersonalPushSubscription();
                     if (!subscription.ok) {
                         throw new Error(`离线推送已部署，但本设备订阅迁移失败：${subscription.error || "未知错误"}。请到推送设置里重新开启离线推送。`);
@@ -303,6 +326,7 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                 ...loadCloudBackupConfig(),
                 url: normalizeBackupUrl(connectUrl),
                 key: connectKey.trim(),
+                managedProjectRef: projectRefFromUrl(connectUrl) || loadCloudBackupConfig().managedProjectRef,
             };
             const test = await testCloudBackupConnection(nextConfig);
             if (!test.ok) throw new Error(`云备份连接失败：${test.error}`);
@@ -315,7 +339,7 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                 const push = await connectPersonalPushCloud();
                 if (push.status === "connected") {
                     const pushWasEnabled = await getOfflinePushState() === "on";
-                    if (pushWasEnabled) {
+                    if (isShellEnvironment() || pushWasEnabled) {
                         const subscription = await ensurePersonalPushSubscription();
                         if (!subscription.ok) {
                             lines.push(`离线推送：已连接 ✓（但本设备订阅注册失败：${subscription.error || "未知错误"}，请到推送设置里重新开启）`);
@@ -440,7 +464,7 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                 onClick={openConnectDialog}
                 disabled={Boolean(busy)}
             >
-                已经部署过？换了设备只需重新连接 →
+                已经部署过、名字被占用了？不要删项目，点这里接上原来的 →
             </button>
 
             {/* 三项状态 */}
@@ -486,9 +510,9 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                         <div className="modal-body flex flex-col gap-3">
                             <h3 className="modal-title">连接已有云服务</h3>
                             <div className="menu-desc !mt-0 rounded-[14px] bg-black/[0.03] px-3 py-2.5">
-                                云端的项目、函数和数据都还在，换设备只是本机丢了连接。填部署时的项目地址和
-                                service_role key（Supabase 控制台 Settings → API 可查），一键探测并接上，
-                                不需要 Access Token，也不会重新部署。
+                                不要删掉旧的「AI Phone Personal Cloud」。云端项目还在，只是这台手机丢了连接。
+                                填项目地址和 service_role key（Supabase 控制台 Project Settings → API），
+                                一键接上。更省事的做法：关掉这里，用上面的 Access Token 再点确认——会更新原来的项目，不会新建。
                             </div>
                             <label className="flex flex-col gap-1">
                                 <span className="menu-desc !mt-0">Supabase 项目地址</span>
@@ -548,17 +572,31 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                             <h3 className="modal-title">部署个人云</h3>
                             {!selectedRef ? (
                                 <div className="menu-desc !mt-0 rounded-[14px] bg-black/[0.03] px-3 py-2.5">
-                                    将新建独立的「AI Phone Personal Cloud」项目，不会写入任何已有项目。
+                                    将新建独立的「{PERSONAL_CLOUD_PROJECT_NAME}」项目。若这个组织里已经有同名项目，会直接更新它，不用删旧的。
                                 </div>
                             ) : (
                                 <div className="menu-desc !mt-0 rounded-[14px] bg-black/[0.03] px-3 py-2.5">
-                                    将更新此前由 AI Phone 创建的专用项目。
+                                    将更新已有的「{PERSONAL_CLOUD_PROJECT_NAME}」。不会新建，也不会删掉旧项目。
                                 </div>
                             )}
                             {!selectedRef && (
                                 <label className="flex flex-col gap-1">
                                     <span className="menu-desc !mt-0">创建到哪个 Supabase 组织</span>
-                                    <Select value={selectedOrganizationSlug} onChange={(e) => setSelectedOrganizationSlug(e.target.value)}>
+                                    <Select
+                                        value={selectedOrganizationSlug}
+                                        onChange={(e) => {
+                                            const slug = e.target.value;
+                                            setSelectedOrganizationSlug(slug);
+                                            const org = organizations.find(item => item.slug === slug);
+                                            const existing = org
+                                                ? projects.find(project => (
+                                                    project.name === PERSONAL_CLOUD_PROJECT_NAME
+                                                    && project.organizationId === org.id
+                                                ))
+                                                : undefined;
+                                            setSelectedRef(existing?.ref || "");
+                                        }}
+                                    >
                                         <option value="" disabled>请选择…</option>
                                         {organizations.map(org => (
                                             <option key={org.slug} value={org.slug}>

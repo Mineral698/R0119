@@ -35,7 +35,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         val SITE_URL: String = BuildConfig.SITE_URL
-        const val VERSION = "1.0.0"
+        const val VERSION = "1.1.0"
         /** 来电接听等场景的站内深链（必须以 SITE_URL 开头，否则忽略） */
         const val EXTRA_OPEN_URL = "open_url"
     }
@@ -220,6 +220,12 @@ class MainActivity : AppCompatActivity() {
     inner class ShellBridge {
         @JavascriptInterface
         fun getVersion(): String = VERSION
+
+        /** 网页下发个人云 Realtime 参数，供推送前台服务直连用户自己的 Supabase。 */
+        @JavascriptInterface
+        fun configurePush(json: String) {
+            PushService.applyPersonalConfig(this@MainActivity, json)
+        }
 
         /** 打开本应用的系统设置页（引导用户关电池限制、开自启动）。 */
         @JavascriptInterface

@@ -115,10 +115,10 @@ SUPABASE_ANON_KEY=your-anon-key
 这套功能不要求站点维护者把所有用户数据放进同一个 Supabase。每位用户可在
 **设置 → 云服务部署**里粘贴自己的 Supabase Access Token、选择自己的组织，应用会：
 
-1. 自动创建一个名为 `AI Phone Personal Cloud` 的独立项目；
+1. 自动创建一个名为 `AI Phone Personal Cloud` 的独立项目；组织里已经有这个名字时，会**更新原来的项目**，不用删掉重建；
 2. 按用户勾选范围部署云备份、微信 Edge Function、离线推送与快捷动作函数；
 3. 把该项目的地址和密钥只保存在用户自己的小手机数据中，Access Token 仅在本次部署请求中透传，不保存；
-4. 用项目标记和数据库表检查阻止误装进已有业务库。
+4. 用项目标记和数据库表检查阻止误装进已有业务库。换了手机或 App 数据丢了，用同一页的「已经部署过」填回项目地址和 service_role key 即可，同样不要删云端项目。
 
 个人云与上文的站点运营库是两件事：`SUPABASE_URL` 用于账号、市场等站点级功能；
 个人云由用户在界面中创建，默认不会复用或修改站点运营库。自部署者只想个人使用时，
@@ -127,6 +127,19 @@ SUPABASE_ANON_KEY=your-anon-key
 部署完成后，在聊天信息页开启「离线推送与定时消息」；微信 Bot 则在
 **设置 → 微信接入**中添加。云端与本地使用相同的角色运行包，微信消息、离线回复、
 快捷动作结果和来电留痕会按因果顺序合并回小手机。
+
+### 安卓壳离线推送（自部署）
+
+国行安卓收不到 Web Push。仓库自带 `android-shell/`：打一个全屏 WebView APK，
+用前台服务连你个人云的 Realtime，杀后台也能弹系统通知。完整步骤见
+[`android-shell/README.md`](./android-shell/README.md)。最短路径：
+
+1. 部署网站（`NEXT_PUBLIC_SELF_HOSTED_MODE=true`）；
+2. GitHub Actions 工作流 **Build Android Shell APK**，变量 `SHELL_SITE_URL` 填站点地址；
+3. 安装 APK 后到 **设置 → 云服务部署** 勾选离线推送；
+4. 聊天信息页创建「长时间没消息时」或「固定时间后」规则，并允许系统通知。
+
+需要重新打包 1.1+ 的壳：旧版只会去连站点联机库，连不上个人云。
 
 ### iOS 屏幕速聊（辅助触控双击）
 

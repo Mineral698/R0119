@@ -30,6 +30,7 @@ const QA_BASE_KNOWLEDGE_LINES = [
   "- 部署：可部署到 Netlify / Vercel，需在平台后台设置环境变量 NEXT_PUBLIC_SELF_HOSTED_MODE=true（单机模式，跳过账号门禁）。",
   "- 仓库有 main（正常设备）与 test（兼容设备）两个分支：部分设备全屏或显示异常时部署 test 分支。",
   "- 云端功能（账号、便签墙、游戏大厅、应用市场、黑市等）需要自建 Supabase 并执行 docs/ 下对应建表脚本。",
+  "- 自部署安卓离线推送：打包 android-shell APK（SHELL_SITE_URL=站点），在 App 里「设置 → 云服务部署」勾选离线推送，再到聊天信息页创建定时/冷场规则。必须用 1.1+ 壳。",
   "",
   "## 环境变量速查（全部可选，除单机模式开关）",
   "- NEXT_PUBLIC_SELF_HOSTED_MODE：true=单机模式（自部署推荐）；false=启用账号/激活码门禁（需 Supabase）",

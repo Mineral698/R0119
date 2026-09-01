@@ -25,9 +25,9 @@ import kotlin.concurrent.thread
 /**
  * 推送前台服务：不依赖 Google 服务的自建长连接。
  *
- * 原理：用 WebView 里已登录的站点 Cookie 调用站点接口拿到
- * Supabase 地址 / anon key / 当前用户 id，然后用 OkHttp WebSocket
- * 直连 Supabase Realtime，订阅个人频道 shellpush:<userId>。
+ * 原理：网页通过 AndroidShell.configurePush 下发个人云地址后，用 OkHttp
+ * WebSocket 直连该项目的 Realtime，订阅个人频道 shellpush:<userId>
+ * （自部署为 shellpush:owner）。未下发时回退站点 /api/online/config。
  * 服务端（push-generate / 测试按钮）发离线消息时会向该频道广播一份，
  * 本服务收到即弹系统通知——App 被杀也能收（前台服务存活期间）。
  */
@@ -38,13 +38,37 @@ class PushService : Service() {
         private const val CH_MESSAGES = "shell_messages"
         private const val CH_CALLS = "shell_calls"
         private const val NOTIF_FG_ID = 1
+        private const val PREFS = "shell_push"
+        private const val KEY_PERSONAL_CONFIG = "personal_config"
         private var running = false
+        @Volatile private var instance: PushService? = null
 
         fun start(context: Context) {
             if (running) return
             val intent = Intent(context, PushService::class.java)
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent)
             else context.startService(intent)
+        }
+
+        /**
+         * 网页把个人云 Realtime 参数交过来。自部署没有站点级 Supabase，
+         * 壳必须连用户自己的项目、订阅 shellpush:owner。
+         */
+        fun applyPersonalConfig(context: Context, json: String) {
+            val parsed = runCatching { JSONObject(json) }.getOrNull() ?: return
+            val url = parsed.optString("supabaseUrl").trim().trimEnd('/')
+            val key = parsed.optString("realtimeKey").trim()
+            val userId = parsed.optString("userId").trim()
+            if (url.isEmpty() || key.isEmpty() || userId.isEmpty()) return
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_PERSONAL_CONFIG, JSONObject()
+                    .put("supabaseUrl", url)
+                    .put("realtimeKey", key)
+                    .put("userId", userId)
+                    .toString())
+                .apply()
+            instance?.requestReconnect()
         }
     }
 
@@ -58,12 +82,14 @@ class PushService : Service() {
     private var msgSeq = 2
     private var notifId = 100
     private var shellSubRegistered = false
+    @Volatile private var reconnectRequested = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         running = true
+        instance = this
         createChannels()
         startForeground(NOTIF_FG_ID, buildKeepAliveNotification("等待连接…"))
         thread(name = "shell-push-loop") { connectionLoop() }
@@ -74,33 +100,65 @@ class PushService : Service() {
     override fun onDestroy() {
         stopped = true
         running = false
+        if (instance === this) instance = null
         socket?.cancel()
         super.onDestroy()
+    }
+
+    private fun requestReconnect() {
+        reconnectRequested = true
+        shellSubRegistered = false
+        socket?.cancel()
     }
 
     // ── 连接循环：拿配置 → 连 WS → 断线退避重连 ──
     private fun connectionLoop() {
         var backoffSec = 5L
         while (!stopped) {
+            reconnectRequested = false
             val config = fetchConfig()
             if (config == null) {
-                updateKeepAlive("未登录或站点不可达，稍后重试")
+                updateKeepAlive("等待网页下发推送配置…")
                 sleepSec(60); continue
             }
             updateKeepAlive("已连接，等待角色消息")
             val closedNormally = runSocket(config)
             if (stopped) break
             updateKeepAlive("连接断开，重连中…")
-            sleepSec(if (closedNormally) 3 else backoffSec)
-            backoffSec = (backoffSec * 2).coerceAtMost(120)
-            if (closedNormally) backoffSec = 5
+            sleepSec(if (closedNormally || reconnectRequested) 3 else backoffSec)
+            backoffSec = if (closedNormally || reconnectRequested) 5 else (backoffSec * 2).coerceAtMost(120)
         }
     }
 
-    private data class PushConfig(val supabaseUrl: String, val anonKey: String, val userId: String)
+    private data class PushConfig(
+        val supabaseUrl: String,
+        val anonKey: String,
+        val userId: String,
+        val personal: Boolean = false,
+    )
+
+    private fun loadPersonalConfig(): PushConfig? {
+        val raw = getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_PERSONAL_CONFIG, null) ?: return null
+        val obj = runCatching { JSONObject(raw) }.getOrNull() ?: return null
+        val url = obj.optString("supabaseUrl").trim().trimEnd('/')
+        val key = obj.optString("realtimeKey").trim()
+        val userId = obj.optString("userId").trim()
+        if (url.isEmpty() || key.isEmpty() || userId.isEmpty()) return null
+        return PushConfig(url, key, userId, personal = true)
+    }
+
+    /** 优先用网页下发的个人云参数；没有则回退站点联机库（官方托管）。 */
+    private fun fetchConfig(): PushConfig? {
+        val personal = loadPersonalConfig()
+        if (personal != null) {
+            registerShellSubscription(personal)
+            return personal
+        }
+        return fetchSiteConfig()
+    }
 
     /** 借 WebView 的登录 Cookie 调站点接口获取连接参数。 */
-    private fun fetchConfig(): PushConfig? = runCatching {
+    private fun fetchSiteConfig(): PushConfig? = runCatching {
         val cookie = CookieManager.getInstance().getCookie(MainActivity.SITE_URL) ?: return null
 
         fun getJson(path: String): JSONObject? {
@@ -123,31 +181,41 @@ class PushService : Service() {
         val url = online.optString("supabaseUrl")
         val key = online.optString("anonKey")
         if (url.isEmpty() || key.isEmpty()) return null
-        registerShellSubscription(cookie, userId)
-        PushConfig(url.trimEnd('/'), key, userId)
+        val config = PushConfig(url.trimEnd('/'), key, userId, personal = false)
+        registerShellSubscription(config, cookie)
+        config
     }.getOrNull()
 
     /**
-     * 在站点注册一条合成推送订阅（endpoint = shell:<userId>）。
+     * 登记合成推送订阅（endpoint = shell:<userId>）。
      * 作用是让离线消息排期的"账号已订阅"门控放行，并让服务端知道
      * 要往 shellpush 频道广播；服务端不会对它做 Web Push 投递。
      */
-    private fun registerShellSubscription(cookie: String, userId: String) {
+    private fun registerShellSubscription(config: PushConfig, cookie: String? = null) {
         if (shellSubRegistered) return
         runCatching {
             val body = JSONObject()
-                .put("endpoint", "shell:$userId")
+                .put("endpoint", "shell:${config.userId}")
                 .put(
                     "keys",
                     JSONObject().put("p256dh", "shell").put("auth", "shell"),
                 )
                 .toString()
                 .toRequestBody("application/json".toMediaType())
-            val request = Request.Builder()
-                .url("${MainActivity.SITE_URL}/api/push/subscribe")
-                .header("Cookie", cookie)
-                .post(body)
-                .build()
+            val request = if (config.personal) {
+                Request.Builder()
+                    .url("${config.supabaseUrl}/functions/v1/ai-phone-push?action=subscribe")
+                    .header("x-ai-phone-service-key", config.anonKey)
+                    .header("Content-Type", "application/json")
+                    .post(body)
+                    .build()
+            } else {
+                Request.Builder()
+                    .url("${MainActivity.SITE_URL}/api/push/subscribe")
+                    .header("Cookie", cookie ?: "")
+                    .post(body)
+                    .build()
+            }
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful) shellSubRegistered = true
             }
@@ -361,6 +429,11 @@ class PushService : Service() {
     }
 
     private fun sleepSec(sec: Long) {
-        runCatching { Thread.sleep(sec * 1000) }
+        var left = sec
+        while (left > 0 && !stopped && !reconnectRequested) {
+            val slice = left.coerceAtMost(2)
+            runCatching { Thread.sleep(slice * 1000) }
+            left -= slice
+        }
     }
 }
