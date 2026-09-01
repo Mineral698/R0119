@@ -43,7 +43,15 @@ export function CloudServicesPage() {
 }
 
 type OrganizationOption = { id: string; slug: string; name: string };
-type ProjectOption = { ref: string; name: string; organizationId: string };
+type ProjectOption = { ref: string; name: string; organizationId: string; organizationSlug?: string };
+
+function noOrganizationHelp(token: string, orgError?: string): string {
+    if (!token.trim().startsWith("sbp_")) {
+        return "请粘贴账号 Access Token（以 sbp_ 开头）。项目 Settings → API 里的 service_role / anon 不能用来一键部署。已经建过「AI Phone Personal Cloud」的不要删项目，点本页「已经部署过」填项目地址和 service_role key。";
+    }
+    const extra = orgError ? `\n（接口返回：${orgError}）` : "";
+    return `这个 Access Token 读不到任何组织。请到 supabase.com/dashboard/account/tokens 新建一个（不要用过窄的细粒度权限）。已经建过个人云的不要删项目，用本页「已经部署过」接上即可。${extra}`;
+}
 
 function smartRegionForCurrentTimeZone(): "americas" | "emea" | "apac" {
     const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
@@ -128,27 +136,37 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                 setProjects([]);
                 setSelectedOrganizationSlug(config.managedOrganizationSlug || "");
             } else {
+                if (!token.trim().startsWith("sbp_")) {
+                    throw new Error(noOrganizationHelp(token));
+                }
                 const data = await callSupabaseAdmin<{
                     organizations: OrganizationOption[];
                     projects?: ProjectOption[];
+                    orgError?: string;
                 }>({ action: "organizations", token });
-                if (data.organizations.length === 0) throw new Error("该 Supabase 账号下没有可用组织。");
+                const listedOrgs = Array.isArray(data.organizations) ? data.organizations : [];
                 const listedProjects = Array.isArray(data.projects) ? data.projects : [];
-                setOrganizations(data.organizations);
-                setProjects(listedProjects);
                 const dedicated = listedProjects.filter(project => project.name === PERSONAL_CLOUD_PROJECT_NAME);
+                if (listedOrgs.length === 0 && dedicated.length === 0) {
+                    throw new Error(noOrganizationHelp(token, data.orgError));
+                }
+                setOrganizations(listedOrgs);
+                setProjects(listedProjects);
                 const only = dedicated.length === 1 ? dedicated[0] : undefined;
                 const onlyOrg = only
-                    ? data.organizations.find(org => org.id === only.organizationId)
+                    ? listedOrgs.find(org => org.id === only.organizationId || org.slug === only.organizationSlug)
                     : undefined;
                 if (only) {
                     // 账号里已经有同名个人云：接上它，不要再创建、更不要让用户去删。
                     setSelectedRef(only.ref);
-                    setSelectedOrganizationSlug(onlyOrg?.slug || data.organizations[0]?.slug || "");
+                    setSelectedOrganizationSlug(onlyOrg?.slug || only.organizationSlug || listedOrgs[0]?.slug || "");
                 } else {
-                    const defaultOrg = data.organizations.length === 1 ? data.organizations[0] : undefined;
+                    const defaultOrg = listedOrgs.length === 1 ? listedOrgs[0] : undefined;
                     const inDefault = defaultOrg
-                        ? dedicated.find(project => project.organizationId === defaultOrg.id)
+                        ? dedicated.find(project => (
+                            project.organizationId === defaultOrg.id
+                            || project.organizationSlug === defaultOrg.slug
+                        ))
                         : undefined;
                     setSelectedOrganizationSlug(defaultOrg?.slug || "");
                     setSelectedRef(inDefault?.ref || "");
@@ -433,7 +451,7 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                     <ExternalLink size={15} strokeWidth={1.8} />
                     打开 Supabase 令牌页
                 </button>
-                <p className="text-[calc(11px*var(--app-text-scale,1))] font-medium text-gray-400">生成 Access Token 后复制粘贴；只用一次，不保存</p>
+                <p className="text-[calc(11px*var(--app-text-scale,1))] font-medium text-gray-400">必须是账号 Access Token（sbp_ 开头），不是项目 API 密钥；只用一次，不保存</p>
             </div>
 
             {/* token 输入 + 圆形确认钮 */}
