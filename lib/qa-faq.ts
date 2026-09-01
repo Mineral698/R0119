@@ -79,6 +79,9 @@ true = 单机模式，跳过账号/激活码门禁，用本地账号直接进入
 ### Q: 自部署安卓版怎么做离线推送 / 让角色随机时间主动发消息？
 网站本身不能在国行安卓上走 Web Push。请打包仓库里的安卓壳（android-shell/，GitHub Actions 工作流 Build Android Shell APK，变量 SHELL_SITE_URL 填你的站点），安装后：① 设置 → 云服务部署，用自己的 Supabase Access Token 创建个人云并勾选离线推送；② 聊天信息页打开「离线推送与定时消息」，创建「长时间没消息时」（可重复，接近随机间隔）或「固定时间后」规则；③ 允许通知、关掉电池优化，点「测试」验证。生成在个人云完成，壳负责弹系统通知。必须使用 1.1+ 的壳（带 configurePush 桥），旧壳连的是站点联机库，自部署收不到。详细步骤见仓库 android-shell/README.md。
 
+### Q: 一键部署说名字被占用了，要删掉以前的「AI Phone Personal Cloud」吗？
+不要删。那就是上次建好的个人云。再贴一次 Access Token 点确认，会更新原来的项目，不会新建。App 数据丢了或换了手机，用同一页的「已经部署过」填回项目地址和 service_role key（Supabase 控制台 Project Settings → API）接上即可。
+
 ### Q: 哪些环境变量不能公开？
 NEXT_PUBLIC_ 开头的变量会打包进浏览器代码、完全公开。Supabase service_role、后台管理密钥、第三方 API 私钥绝不能写进任何 NEXT_PUBLIC_ 变量。
 

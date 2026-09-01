@@ -8,6 +8,7 @@ import { randomBytes } from "node:crypto";
 export const runtime = "nodejs";
 
 const MANAGEMENT_API = "https://api.supabase.com/v1";
+const PERSONAL_CLOUD_PROJECT_NAME = "AI Phone Personal Cloud";
 
 type AdminPayload = {
   action?: string;
@@ -57,12 +58,48 @@ async function managementFetch(token: string, path: string, init?: RequestInit):
   });
 }
 
+type ListedProject = { ref: string; name: string; organizationId: string };
+
+async function listManagementProjects(token: string): Promise<ListedProject[]> {
+  const response = await managementFetch(token, "/projects");
+  if (!response.ok) return [];
+  const data = await response.json() as Array<{
+    id?: unknown;
+    ref?: unknown;
+    name?: unknown;
+    organization_id?: unknown;
+  }>;
+  return (Array.isArray(data) ? data : [])
+    .map((item) => ({
+      ref: typeof item.ref === "string" ? item.ref : typeof item.id === "string" ? item.id : "",
+      name: typeof item.name === "string" ? item.name : "",
+      organizationId: typeof item.organization_id === "string" ? item.organization_id : "",
+    }))
+    .filter((item) => cleanProjectRef(item.ref));
+}
+
+async function findExistingPersonalCloud(token: string, organizationSlug: string): Promise<string> {
+  const orgResponse = await managementFetch(token, "/organizations");
+  if (!orgResponse.ok) return "";
+  const orgs = await orgResponse.json() as Array<{ id?: unknown; slug?: unknown }>;
+  const org = (Array.isArray(orgs) ? orgs : []).find((item) => item.slug === organizationSlug);
+  const orgId = typeof org?.id === "string" ? org.id : "";
+  const named = (await listManagementProjects(token))
+    .filter((project) => project.name === PERSONAL_CLOUD_PROJECT_NAME);
+  const match = (orgId && named.find((project) => project.organizationId === orgId))
+    || (named.length === 1 ? named[0] : undefined);
+  return match?.ref || "";
+}
+
 async function handleOrganizations(token: string): Promise<NextResponse> {
-  const response = await managementFetch(token, "/organizations");
-  if (!response.ok) {
-    return NextResponse.json({ ok: false, error: await upstreamMessage(response) }, { status: response.status });
+  const [orgResponse, projects] = await Promise.all([
+    managementFetch(token, "/organizations"),
+    listManagementProjects(token),
+  ]);
+  if (!orgResponse.ok) {
+    return NextResponse.json({ ok: false, error: await upstreamMessage(orgResponse) }, { status: orgResponse.status });
   }
-  const data = await response.json() as Array<{ id?: unknown; slug?: unknown; name?: unknown }>;
+  const data = await orgResponse.json() as Array<{ id?: unknown; slug?: unknown; name?: unknown }>;
   const organizations = (Array.isArray(data) ? data : [])
     .map((item) => ({
       id: typeof item.id === "string" ? item.id : "",
@@ -70,7 +107,7 @@ async function handleOrganizations(token: string): Promise<NextResponse> {
       name: typeof item.name === "string" ? item.name : "",
     }))
     .filter((item) => item.slug);
-  return NextResponse.json({ ok: true, organizations });
+  return NextResponse.json({ ok: true, organizations, projects });
 }
 
 async function handleCreateProject(
@@ -78,20 +115,28 @@ async function handleCreateProject(
   organizationSlug: string,
   regionCode: "americas" | "emea" | "apac",
 ): Promise<NextResponse> {
+  const existing = await findExistingPersonalCloud(token, organizationSlug);
+  if (existing) {
+    return NextResponse.json({ ok: true, projectRef: existing, reused: true });
+  }
+
   // 只为创建请求生成一次，既不返回浏览器也不持久化。应用后续通过项目密钥工作，
   // 用户若需要直连数据库，可在自己的 Supabase Dashboard 中重设数据库密码。
   const dbPass = `${randomBytes(36).toString("base64url")}Aa1!`;
   const response = await managementFetch(token, "/projects", {
     method: "POST",
     body: JSON.stringify({
-      name: "AI Phone Personal Cloud",
+      name: PERSONAL_CLOUD_PROJECT_NAME,
       organization_slug: organizationSlug,
       db_pass: dbPass,
       region_selection: { type: "smartGroup", code: regionCode },
     }),
   });
   if (!response.ok) {
-    return NextResponse.json({ ok: false, error: await upstreamMessage(response) }, { status: response.status });
+    const message = await upstreamMessage(response);
+    const reused = await findExistingPersonalCloud(token, organizationSlug);
+    if (reused) return NextResponse.json({ ok: true, projectRef: reused, reused: true });
+    return NextResponse.json({ ok: false, error: message }, { status: response.status });
   }
   const data = await response.json() as { id?: unknown; ref?: unknown; status?: unknown };
   const projectRef = typeof data.ref === "string" ? data.ref : typeof data.id === "string" ? data.id : "";

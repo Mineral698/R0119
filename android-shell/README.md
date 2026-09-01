@@ -113,7 +113,7 @@ android-shell/
 自部署（`NEXT_PUBLIC_SELF_HOSTED_MODE=true`）请走**个人云**，不要指望给站点填 `SUPABASE_URL` 来收离线消息：
 
 1. 把网站部署到 Netlify / Vercel，用 GitHub Actions 按上面步骤打 APK，`SHELL_SITE_URL` 填你的站点。
-2. 安装 APK，打开后到 **设置 → 云服务部署**，用自己的 Supabase Access Token 创建个人云并勾选「离线推送」。
+2. 安装 APK，打开后到 **设置 → 云服务部署**，用自己的 Supabase Access Token 部署个人云并勾选「离线推送」。以前已经创建过「AI Phone Personal Cloud」的**不要删项目**——再贴一次 Token 会更新原来的项目；本机丢了连接也可以点「已经部署过」填回地址和 service_role key。
 3. 到某个角色的聊天信息页打开「离线推送与定时消息」，创建「长时间没消息时」或「固定时间后」规则。
 4. 允许通知、关掉电池优化（见上文）。设置页点「测试」：杀掉后台，约 6 秒后应收到系统通知。
 
