@@ -5,10 +5,11 @@
 // 各挑一件调成「特调」，特调可命名保存/分享。对局 = 角色卡 + 特调的一次运行。
 // 本文件只定义数据形状，装配见 assembler.ts，存取见 storage.ts。
 
-/** 材料十类（槽位一一对应） */
+/** 材料种类（槽位一一对应） */
 export type MixMaterialKind =
     | "character" // 角色卡
     | "persona"   // 面具：用户人设（{{user}} 的名字与设定）
+    | "preface"   // 序言：提示词最顶上的开场说明（择一；不配则没有这一段）
     | "base"      // 基底：扮演总纲
     | "flavor"    // 风味：文风
     | "glass"     // 杯型：输出格式
@@ -22,6 +23,7 @@ export type MixMaterialKind =
 export const MIX_KIND_LABELS: Record<MixMaterialKind, string> = {
     character: "角色卡",
     persona: "面具",
+    preface: "序言",
     base: "基底",
     flavor: "风味",
     glass: "杯型",
@@ -35,13 +37,14 @@ export const MIX_KIND_LABELS: Record<MixMaterialKind, string> = {
 
 /** 吧台槽位顺序（角色卡永远第一槽） */
 export const MIX_SLOT_ORDER: MixMaterialKind[] = [
-    "character", "persona", "base", "flavor", "glass", "strength", "ticket", "garnish", "encore", "filter", "mechanism",
+    "character", "persona", "preface", "base", "flavor", "glass", "strength", "ticket", "garnish", "encore", "filter", "mechanism",
 ];
 
 /** TAB 上大字下面那行小字：说明这一类到底干什么（不进提示词的种类标它的实际职责） */
 export const MIX_KIND_SECTION_LABELS: Record<MixMaterialKind, string> = {
     character: "角色资料",
     persona: "用户资料",
+    preface: "开场说明",
     base: "扮演总纲",
     flavor: "文风",
     glass: "正文输出要求",
@@ -65,6 +68,7 @@ export const MIX_REQUIRED_KINDS: MixMaterialKind[] = ["character"];
 export const MIX_SLOT_STACK: Record<MixMaterialKind, "concat" | "first"> = {
     character: "first",
     persona: "first",
+    preface: "first",
     base: "concat",
     flavor: "concat",
     glass: "concat",
@@ -76,8 +80,8 @@ export const MIX_SLOT_STACK: Record<MixMaterialKind, "concat" | "first"> = {
     mechanism: "concat",
 };
 
-/** 不给设生效条件的格：这两格没了这一局就不成立 */
-export const MIX_NO_CONDITION_KINDS: MixMaterialKind[] = ["character", "persona"];
+/** 不给设生效条件的格：择一型的格不吃条件（角色卡/面具没了这一局就不成立，序言恒在顶端） */
+export const MIX_NO_CONDITION_KINDS: MixMaterialKind[] = ["character", "persona", "preface"];
 
 /**
  * 会在下载方设备上「按轮执行、且能改写对话」的材料。
@@ -194,10 +198,41 @@ export type MixCharacterCard = MixMaterialMeta & {
     authorNote?: string;
 };
 
-/** 纯文本类材料：基底 / 风味 / 杯型 / 苦精 */
+/** 可由序言材料覆写标题的提示词分段 */
+export type MixSectionTitleKey =
+    | "base"      // 扮演总纲
+    | "character" // 角色资料
+    | "persona"   // 用户资料
+    | "world"     // 世界与剧情
+    | "flavor"    // 文风
+    | "glass"     // 正文输出要求
+    | "ticket"    // 状态栏
+    | "encore"    // 小剧场
+    | "examples"  // 示例对话
+    | "checklist"; // 输出格式检查
+
+/** 各分段的默认标题（编辑器占位符与装配器共用，逐字即历史版本的标题） */
+export const MIX_SECTION_TITLE_DEFAULTS: Record<MixSectionTitleKey, string> = {
+    base: "扮演总纲",
+    character: "角色资料",
+    persona: "用户资料",
+    world: "世界与剧情",
+    flavor: "文风",
+    glass: "正文输出要求",
+    ticket: "状态栏",
+    encore: "小剧场",
+    examples: "示例对话",
+    checklist: "输出格式检查",
+};
+
+/** 纯文本类材料：序言 / 基底 / 风味 / 杯型 / 苦精 */
 export type MixTextMaterial = MixMaterialMeta & {
-    kind: "base" | "flavor" | "glass" | "strength";
+    kind: "preface" | "base" | "flavor" | "glass" | "strength";
     content: string;
+    /** 仅序言使用：自定义各分段标题（可用 {{char}}/{{user}} 宏），让整份提示词
+     *  的措辞跟上序言定下的基调。缺省/留空的键用默认标题；交叉引用（如输出
+     *  格式检查里提到的段名）会跟着换。 */
+    sectionTitles?: Partial<Record<MixSectionTitleKey, string>>;
 };
 
 /** 面具（用户人设）：{{user}} 是谁——名字 + 人设正文，装配成「用户资料」段 */

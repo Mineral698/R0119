@@ -14,7 +14,7 @@ import type {
     MixTextMaterial,
     MixTicketVar,
 } from "@/lib/mixology/types";
-import { createMixId, formatMixTags, MIX_KIND_LABELS, MIX_PANEL_DEFAULT_LAYOUT, MIX_TAG_MAX, mixPanelLayoutOf, parseMixTags } from "@/lib/mixology/types";
+import { createMixId, formatMixTags, MIX_KIND_LABELS, MIX_PANEL_DEFAULT_LAYOUT, MIX_SECTION_TITLE_DEFAULTS, MIX_TAG_MAX, mixPanelLayoutOf, parseMixTags, type MixSectionTitleKey } from "@/lib/mixology/types";
 import { applyMixFilterRules } from "@/lib/mixology/prose";
 import { MixCraftSheet, MixPreviewInline, MixStructureSheet } from "./mixology-preview";
 
@@ -29,6 +29,10 @@ const KIND_GUIDE: Record<MixMaterialKind, { what: string; where: string }> = {
     persona: {
         what: "这里写用户人设：{{user}} 是谁——身份、性格、外貌，以及与{{char}}之间那段关系里你这一侧的设定。",
         where: "进入「用户资料」段；填了名字就替换全部 {{user}}。",
+    },
+    preface: {
+        what: "这里写序言：整份提示词的第一段话，声明这是角色扮演、模型该以什么姿态读后面的内容。开场直接影响全局文风；建议保留一句「越靠后的要求优先级越高」之类的优先级声明。",
+        where: "进入提示词最顶端（扮演总纲之前）；一局只用一件，不配则提示词没有这一段。",
     },
     base: {
         what: "这里写扮演总纲：如何入戏、能否代替玩家发言、是否允许冲突与负面情绪。约束态度，不涉及文笔。",
@@ -76,8 +80,12 @@ const KIND_GUIDE: Record<MixMaterialKind, { what: string; where: string }> = {
 const HEADING_NOTE = "要在框里加小标题，用 ### 开头（# 和 ## 已被应用占用）。";
 const HEADING_NOTE_KINDS: MixMaterialKind[] = ["character", "persona", "base", "flavor", "glass", "strength", "ticket", "encore"];
 
-/** 文本类材料（基底/风味/杯型/苦精）的字段名与示例 */
-const TEXT_FIELD_COPY: Record<"base" | "flavor" | "glass" | "strength", { label: string; placeholder: string }> = {
+/** 文本类材料（序言/基底/风味/杯型/苦精）的字段名与示例 */
+const TEXT_FIELD_COPY: Record<"preface" | "base" | "flavor" | "glass" | "strength", { label: string; placeholder: string }> = {
+    preface: {
+        label: "序言",
+        placeholder: "例：\n这是一场沉浸式角色扮演，你要扮演的角色是{{char}}。下方依次给出扮演规则、角色资料与输出要求，请全部遵守；越靠后的要求优先级越高。\n（建议保留一句优先级声明，应用的段落排序依赖它。）",
+    },
     base: {
         label: "扮演总纲",
         placeholder: "例：\n你将完全成为{{char}}，以第一视角活在故事里。\n- 绝不跳出角色，绝不以 AI 自称。\n- 绝不代替{{user}}说话或做决定。\n- 允许出现冲突、拒绝与负面情绪，贴合人设比讨好{{user}}更重要。",
@@ -166,6 +174,10 @@ export function MixMaterialEditor({ kind, initial, onSave, onCancel }: EditorPro
     const [content, setContent] = useState(
         initial && "content" in initial ? (initial as MixTextMaterial).content : "",
     );
+    // 仅序言：各分段标题的覆写（留空的键用默认标题）
+    const [sectionTitles, setSectionTitles] = useState<Partial<Record<MixSectionTitleKey, string>>>(
+        initial?.kind === "preface" ? { ...(initial as MixTextMaterial).sectionTitles } : {},
+    );
     const [personaUserName, setPersonaUserName] = useState(initial?.kind === "persona" ? initial.userName ?? "" : "");
     const [contract, setContract] = useState(initial?.kind === "ticket" ? initial.contract : "");
     const [renderHtml, setRenderHtml] = useState(initial?.kind === "ticket" ? initial.renderHtml : "");
@@ -226,7 +238,10 @@ export function MixMaterialEditor({ kind, initial, onSave, onCancel }: EditorPro
     // 与大厅同一个做法：portal 到应用根层去铺满整个画面。
     const [overlayHost, setOverlayHost] = useState<HTMLElement | null>(null);
     useEffect(() => { setOverlayHost(document.querySelector<HTMLElement>(".mixology-app")); }, []);
-    const inOverlay = (node: ReactNode) => (overlayHost ? createPortal(node, overlayHost) : null);
+    // 对局画面（.mix-game）是 z-index:45 的全屏层，速查弹层的 mask 自身只有 40：
+    // 从对局内的编辑器打开会整个被压在画面底下，按钮看着像没反应。套一层
+    // z-index:50 的定位容器抬到对局之上、toast(60)/确认弹窗(70)之下。
+    const inOverlay = (node: ReactNode) => (overlayHost ? createPortal(<div className="mix-overlay-raise">{node}</div>, overlayHost) : null);
     const fileRef = useRef<HTMLInputElement | null>(null);
 
     // 标签：输入的时候就按最终口径拆好给作者看，免得存下来才发现被掐了
@@ -365,7 +380,20 @@ export function MixMaterialEditor({ kind, initial, onSave, onCancel }: EditorPro
             setError(`${MIX_KIND_LABELS[kind]}的内容不能为空。`);
             return;
         }
-        onSave({ ...meta, kind, content: content.trim() } as MixTextMaterial);
+        // 序言的标题覆写：只存写了内容的键，一项都没写就不带这个字段
+        let cleanedTitles: Partial<Record<MixSectionTitleKey, string>> | undefined;
+        if (kind === "preface") {
+            const entries = (Object.keys(MIX_SECTION_TITLE_DEFAULTS) as MixSectionTitleKey[])
+                .map((key) => [key, (sectionTitles[key] ?? "").replace(/\s+/g, " ").trim()] as const)
+                .filter(([, value]) => value);
+            cleanedTitles = entries.length ? Object.fromEntries(entries) : undefined;
+        }
+        onSave({
+            ...meta,
+            kind,
+            content: content.trim(),
+            ...(kind === "preface" ? { sectionTitles: cleanedTitles } : {}),
+        } as MixTextMaterial);
     };
 
     const guide = KIND_GUIDE[kind];
@@ -537,7 +565,7 @@ export function MixMaterialEditor({ kind, initial, onSave, onCancel }: EditorPro
                     </Field>
                 </>
             ) : null}
-            {kind === "base" || kind === "flavor" || kind === "glass" || kind === "strength" ? (
+            {kind === "preface" || kind === "base" || kind === "flavor" || kind === "glass" || kind === "strength" ? (
                 <Field label={TEXT_FIELD_COPY[kind].label} hint="必填，可用 {{char}} / {{user}}">
                     <textarea
                         className="mix-textarea"
@@ -546,6 +574,21 @@ export function MixMaterialEditor({ kind, initial, onSave, onCancel }: EditorPro
                         onChange={(e) => setContent(e.target.value)}
                         placeholder={TEXT_FIELD_COPY[kind].placeholder}
                     />
+                </Field>
+            ) : null}
+            {kind === "preface" ? (
+                <Field label="自定义分段标题" hint="选填，让各段标题的措辞贴合序言的基调；留空的用默认。提示词里的交叉引用会跟着换">
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                        {(Object.keys(MIX_SECTION_TITLE_DEFAULTS) as MixSectionTitleKey[]).map((key) => (
+                            <input
+                                key={key}
+                                className="mix-input"
+                                value={sectionTitles[key] ?? ""}
+                                placeholder={MIX_SECTION_TITLE_DEFAULTS[key]}
+                                onChange={(e) => setSectionTitles((prev) => ({ ...prev, [key]: e.target.value }))}
+                            />
+                        ))}
+                    </div>
                 </Field>
             ) : null}
             {kind === "ticket" ? (

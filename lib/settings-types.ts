@@ -33,6 +33,17 @@ export type PromptOrderEntry = {
     enabled: boolean;
 };
 
+export type GenerationParameterKey =
+    | "temperature"
+    | "top_p"
+    | "top_k"
+    | "min_p"
+    | "top_a"
+    | "repetition_penalty"
+    | "frequency_penalty"
+    | "presence_penalty"
+    | "max_tokens";
+
 export type Prompt = {
     identifier: string;
     name: string;
@@ -65,6 +76,11 @@ export type PresetConfig = SettingItemMeta & {
     repetition_penalty: number;
     openai_max_tokens: number;
     openai_max_context: number;
+    /**
+     * Explicit allow-list of generation parameters sent to model providers.
+     * Undefined keeps legacy behavior so existing/imported presets remain compatible.
+     */
+    enabled_generation_parameters?: GenerationParameterKey[];
     top_a?: number;
     min_p?: number;
     wrap_in_quotes?: boolean;
@@ -161,6 +177,8 @@ export type VoiceApiConfig = {
 };
 
 // --- Image Generation ---
+export type ImageGenerationProvider = "openai" | "novelai";
+
 export type ImageGenerationRequestMode = "server" | "direct";
 
 export type ImageHostingProvider = "none" | "imgbb";
@@ -174,15 +192,41 @@ export type ImageHostingSettings = {
     allowMascotUpload: boolean;
 };
 
+export type NovelAiPreset = {
+    id: string;
+    name: string;
+    model: string;
+    resolution: string; // e.g. "832x1216", "1216x832", "1024x1024", "1024x1536"
+    steps: number;
+    scale: number;
+    sampler: string; // e.g. "k_euler", "k_dpmpp_2m", "k_euler_ancestral"
+    noiseSchedule?: string; // e.g. "karras", "native", "exponential"
+    positivePrompt: string; // 画师串 / 风格 / 质量正向词
+    negativePrompt: string; // 负面提示词 / undesired content
+    qualityToggle?: boolean;
+    smea?: boolean;
+    smeaDyn?: boolean;
+};
+
+export type NovelAiSettings = {
+    apiKey: string;
+    activePresetId: string;
+    presets: NovelAiPreset[];
+};
+
 export type ImageGenerationSettings = {
     enabled: boolean;
+    provider?: ImageGenerationProvider;
     requestMode: ImageGenerationRequestMode;
+    // OpenAI 模式配置
     apiKey: string;
     baseUrl: string;
     model: string;
     size: string;
     quality: string;
     extraPrompt: string;
+    // NovelAI 模式配置
+    novelai?: NovelAiSettings;
     characterReferences: Record<string, {
         assetId: string;
         updatedAt: number;
