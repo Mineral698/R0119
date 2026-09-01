@@ -58,56 +58,71 @@ async function managementFetch(token: string, path: string, init?: RequestInit):
   });
 }
 
-type ListedProject = { ref: string; name: string; organizationId: string };
+type ListedProject = { ref: string; name: string; organizationId: string; organizationSlug: string };
+
+function asObjectArray(value: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (Array.isArray(record.data)) return asObjectArray(record.data);
+    if (Array.isArray(record.organizations)) return asObjectArray(record.organizations);
+    if (Array.isArray(record.projects)) return asObjectArray(record.projects);
+  }
+  return [];
+}
+
+function parseOrganizations(value: unknown): Array<{ id: string; slug: string; name: string }> {
+  return asObjectArray(value)
+    .map((item) => {
+      const id = typeof item.id === "string" ? item.id.trim() : "";
+      const slug = typeof item.slug === "string" && item.slug.trim() ? item.slug.trim() : id;
+      const name = typeof item.name === "string" && item.name.trim() ? item.name.trim() : slug;
+      return { id, slug, name };
+    })
+    .filter((item) => item.slug);
+}
 
 async function listManagementProjects(token: string): Promise<ListedProject[]> {
   const response = await managementFetch(token, "/projects");
   if (!response.ok) return [];
-  const data = await response.json() as Array<{
-    id?: unknown;
-    ref?: unknown;
-    name?: unknown;
-    organization_id?: unknown;
-  }>;
-  return (Array.isArray(data) ? data : [])
+  const data = await response.json().catch(() => null);
+  return asObjectArray(data)
     .map((item) => ({
       ref: typeof item.ref === "string" ? item.ref : typeof item.id === "string" ? item.id : "",
       name: typeof item.name === "string" ? item.name : "",
       organizationId: typeof item.organization_id === "string" ? item.organization_id : "",
+      organizationSlug: typeof item.organization_slug === "string" ? item.organization_slug : "",
     }))
     .filter((item) => cleanProjectRef(item.ref));
 }
 
 async function findExistingPersonalCloud(token: string, organizationSlug: string): Promise<string> {
-  const orgResponse = await managementFetch(token, "/organizations");
-  if (!orgResponse.ok) return "";
-  const orgs = await orgResponse.json() as Array<{ id?: unknown; slug?: unknown }>;
-  const org = (Array.isArray(orgs) ? orgs : []).find((item) => item.slug === organizationSlug);
-  const orgId = typeof org?.id === "string" ? org.id : "";
   const named = (await listManagementProjects(token))
     .filter((project) => project.name === PERSONAL_CLOUD_PROJECT_NAME);
-  const match = (orgId && named.find((project) => project.organizationId === orgId))
-    || (named.length === 1 ? named[0] : undefined);
+  const match = named.find((project) => (
+    project.organizationSlug === organizationSlug
+    || project.organizationId === organizationSlug
+  )) || (named.length === 1 ? named[0] : undefined);
   return match?.ref || "";
 }
 
 async function handleOrganizations(token: string): Promise<NextResponse> {
+  if (!token.startsWith("sbp_")) {
+    return NextResponse.json({
+      ok: false,
+      error: "请粘贴账号 Access Token（以 sbp_ 开头）。项目 Settings → API 里的 service_role / anon / sb_secret 不能用来一键部署。已经建过个人云的不要删项目，用本页「已经部署过」填项目地址和 service_role key。",
+    }, { status: 400 });
+  }
   const [orgResponse, projects] = await Promise.all([
     managementFetch(token, "/organizations"),
     listManagementProjects(token),
   ]);
-  if (!orgResponse.ok) {
-    return NextResponse.json({ ok: false, error: await upstreamMessage(orgResponse) }, { status: orgResponse.status });
-  }
-  const data = await orgResponse.json() as Array<{ id?: unknown; slug?: unknown; name?: unknown }>;
-  const organizations = (Array.isArray(data) ? data : [])
-    .map((item) => ({
-      id: typeof item.id === "string" ? item.id : "",
-      slug: typeof item.slug === "string" ? item.slug : "",
-      name: typeof item.name === "string" ? item.name : "",
-    }))
-    .filter((item) => item.slug);
-  return NextResponse.json({ ok: true, organizations, projects });
+  const organizations = orgResponse.ok ? parseOrganizations(await orgResponse.json().catch(() => null)) : [];
+  const orgError = orgResponse.ok ? undefined : await upstreamMessage(orgResponse);
+  // 组织列表为空或无权限时，仍把项目列表交给前端：已有「AI Phone Personal Cloud」可直接更新。
+  return NextResponse.json({ ok: true, organizations, projects, orgError });
 }
 
 async function handleCreateProject(
