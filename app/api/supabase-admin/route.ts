@@ -67,6 +67,7 @@ function asObjectArray(value: unknown): Array<Record<string, unknown>> {
   if (value && typeof value === "object") {
     const record = value as Record<string, unknown>;
     if (Array.isArray(record.data)) return asObjectArray(record.data);
+    if (Array.isArray(record.items)) return asObjectArray(record.items);
     if (Array.isArray(record.organizations)) return asObjectArray(record.organizations);
     if (Array.isArray(record.projects)) return asObjectArray(record.projects);
   }

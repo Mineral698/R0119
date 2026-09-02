@@ -50,7 +50,17 @@ function noOrganizationHelp(token: string, orgError?: string): string {
         return "请粘贴账号 Access Token（以 sbp_ 开头）。项目 Settings → API 里的 service_role / anon 不能用来一键部署。已经建过「AI Phone Personal Cloud」的不要删项目，点本页「已经部署过」填项目地址和 service_role key。";
     }
     const extra = orgError ? `\n（接口返回：${orgError}）` : "";
-    return `这个 Access Token 读不到任何组织。请到 supabase.com/dashboard/account/tokens 新建一个（不要用过窄的细粒度权限）。已经建过个人云的不要删项目，用本页「已经部署过」接上即可。${extra}`;
+    return `这个 Access Token 读不到组织。细粒度/Scoped 令牌经常这样，请改用 Classic Tokens 再生成一把 sbp_。已经建过个人云的不要删，用本页「已经部署过」接上即可。${extra}`;
+}
+
+function normalizeOrgSlug(value: string): string {
+    const trimmed = value.trim();
+    const fromUrl = trimmed.match(/dashboard\/org\/([^/?#]+)/i);
+    return decodeURIComponent(fromUrl?.[1] || trimmed).replace(/^\/+|\/+$/g, "");
+}
+
+function isDedicatedPersonalCloud(name: string): boolean {
+    return name.trim().toLowerCase() === PERSONAL_CLOUD_PROJECT_NAME.toLowerCase();
 }
 
 function smartRegionForCurrentTimeZone(): "americas" | "emea" | "apac" {
@@ -146,30 +156,23 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                 }>({ action: "organizations", token });
                 const listedOrgs = Array.isArray(data.organizations) ? data.organizations : [];
                 const listedProjects = Array.isArray(data.projects) ? data.projects : [];
-                const dedicated = listedProjects.filter(project => project.name === PERSONAL_CLOUD_PROJECT_NAME);
-                if (listedOrgs.length === 0 && dedicated.length === 0) {
-                    throw new Error(noOrganizationHelp(token, data.orgError));
-                }
+                const dedicated = listedProjects.filter(project => isDedicatedPersonalCloud(project.name));
+                const fallbackProject = dedicated[0] || (listedProjects.length === 1 ? listedProjects[0] : undefined);
                 setOrganizations(listedOrgs);
                 setProjects(listedProjects);
-                const only = dedicated.length === 1 ? dedicated[0] : undefined;
-                const onlyOrg = only
-                    ? listedOrgs.find(org => org.id === only.organizationId || org.slug === only.organizationSlug)
-                    : undefined;
-                if (only) {
-                    // 账号里已经有同名个人云：接上它，不要再创建、更不要让用户去删。
-                    setSelectedRef(only.ref);
-                    setSelectedOrganizationSlug(onlyOrg?.slug || only.organizationSlug || listedOrgs[0]?.slug || "");
+                if (fallbackProject) {
+                    const onlyOrg = listedOrgs.find(org => (
+                        org.id === fallbackProject.organizationId
+                        || org.slug === fallbackProject.organizationSlug
+                    ));
+                    setSelectedRef(fallbackProject.ref);
+                    setSelectedOrganizationSlug(
+                        onlyOrg?.slug || fallbackProject.organizationSlug || listedOrgs[0]?.slug || "",
+                    );
                 } else {
                     const defaultOrg = listedOrgs.length === 1 ? listedOrgs[0] : undefined;
-                    const inDefault = defaultOrg
-                        ? dedicated.find(project => (
-                            project.organizationId === defaultOrg.id
-                            || project.organizationSlug === defaultOrg.slug
-                        ))
-                        : undefined;
                     setSelectedOrganizationSlug(defaultOrg?.slug || "");
-                    setSelectedRef(inDefault?.ref || "");
+                    setSelectedRef("");
                 }
             }
             setScopeBackup(true);
@@ -223,7 +226,7 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                 const created = await callSupabaseAdmin<{ projectRef: string }>({
                     action: "create_project",
                     token,
-                    organizationSlug: selectedOrganizationSlug,
+                    organizationSlug: normalizeOrgSlug(selectedOrganizationSlug),
                     regionCode: smartRegionForCurrentTimeZone(),
                 });
                 projectRef = created.projectRef;
@@ -591,13 +594,16 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                             {!selectedRef ? (
                                 <div className="menu-desc !mt-0 rounded-[14px] bg-black/[0.03] px-3 py-2.5">
                                     将新建独立的「{PERSONAL_CLOUD_PROJECT_NAME}」项目。若这个组织里已经有同名项目，会直接更新它，不用删旧的。
+                                    {organizations.length === 0
+                                        ? " 细粒度令牌经常读不到组织：改用 Classic Tokens，或下面手填组织 slug；已经建过的点取消后用「已经部署过」。"
+                                        : ""}
                                 </div>
                             ) : (
                                 <div className="menu-desc !mt-0 rounded-[14px] bg-black/[0.03] px-3 py-2.5">
                                     将更新已有的「{PERSONAL_CLOUD_PROJECT_NAME}」。不会新建，也不会删掉旧项目。
                                 </div>
                             )}
-                            {!selectedRef && (
+                            {!selectedRef && organizations.length > 0 && (
                                 <label className="flex flex-col gap-1">
                                     <span className="menu-desc !mt-0">创建到哪个 Supabase 组织</span>
                                     <Select
@@ -608,8 +614,8 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                                             const org = organizations.find(item => item.slug === slug);
                                             const existing = org
                                                 ? projects.find(project => (
-                                                    project.name === PERSONAL_CLOUD_PROJECT_NAME
-                                                    && project.organizationId === org.id
+                                                    isDedicatedPersonalCloud(project.name)
+                                                    && (project.organizationId === org.id || project.organizationSlug === org.slug)
                                                 ))
                                                 : undefined;
                                             setSelectedRef(existing?.ref || "");
@@ -622,6 +628,17 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                                             </option>
                                         ))}
                                     </Select>
+                                </label>
+                            )}
+                            {!selectedRef && organizations.length === 0 && (
+                                <label className="flex flex-col gap-1">
+                                    <span className="menu-desc !mt-0">组织 slug（打开组织后，地址栏 supabase.com/dashboard/org/后面那一段，也可整段粘贴）</span>
+                                    <Input
+                                        value={selectedOrganizationSlug}
+                                        onChange={(e) => setSelectedOrganizationSlug(normalizeOrgSlug(e.target.value))}
+                                        placeholder="xxxxxxxxxxxxxxxx"
+                                        spellCheck={false}
+                                    />
                                 </label>
                             )}
                             {scopeRow("云备份", scopeBackup, setScopeBackup, cloudReady)}
