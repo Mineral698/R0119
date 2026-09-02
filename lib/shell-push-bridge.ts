@@ -3,7 +3,7 @@
 // 壳的前台服务读不到。页面把连接参数交给 window.AndroidShell.configurePush，
 // 原生 PushService 再直连用户自己的 Supabase，而不是站点联机库。
 
-import { isCloudBackupConfigured, loadCloudBackupConfig } from "./cloud-backup/config";
+import { isCloudBackupConfigured, loadCloudBackupConfig, normalizeBackupUrl } from "./cloud-backup/config";
 import { loadPersonalPushCloudState } from "./personal-push-cloud";
 
 export const SHELL_PUSH_OWNER_ID = "owner";
@@ -47,12 +47,15 @@ export function isShellPushBridgeReady(): boolean {
 }
 
 export function buildShellPushNativeConfig(): ShellPushNativeConfig | null {
-  const state = loadPersonalPushCloudState();
   const backup = loadCloudBackupConfig();
-  if (!state || !isCloudBackupConfigured(backup)) return null;
+  if (!isCloudBackupConfigured(backup)) return null;
+  const state = loadPersonalPushCloudState();
+  const url = normalizeBackupUrl(state?.url || backup.url);
+  const key = backup.key.trim();
+  if (!url || !key) return null;
   return {
-    supabaseUrl: state.url,
-    realtimeKey: backup.key.trim(),
+    supabaseUrl: url,
+    realtimeKey: key,
     userId: SHELL_PUSH_OWNER_ID,
   };
 }

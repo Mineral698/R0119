@@ -1124,21 +1124,22 @@ Deno.serve(async (req: Request) => {
       }
       if (hasShellSub) {
         try {
+          const shellPayload = {
+            title: deliverAsCall ? `📞 ${title}` : title,
+            body: partBody,
+            url: targetUrl,
+            // 老壳不认识这些字段 → 照常显示普通通知，自然向下兼容
+            ...(deliverAsCall ? { kind: "call", characterName: title, sessionId: callSessionId, callTs: Date.now() } : {}),
+          };
+          const shellMessage = { topic: `shellpush:${job.user_id}`, event: "notify", payload: shellPayload };
           const response = await fetch(`${supabaseUrl}/realtime/v1/api/broadcast`, {
             method: "POST",
             headers: restHeaders,
             body: JSON.stringify({
-              messages: [{
-                topic: `shellpush:${job.user_id}`,
-                event: "notify",
-                payload: {
-                  title: deliverAsCall ? `📞 ${title}` : title,
-                  body: partBody,
-                  url: targetUrl,
-                  // 老壳不认识这些字段 → 照常显示普通通知，自然向下兼容
-                  ...(deliverAsCall ? { kind: "call", characterName: title, sessionId: callSessionId, callTs: Date.now() } : {}),
-                },
-              }],
+              messages: [
+                { ...shellMessage, private: false },
+                { ...shellMessage, private: true },
+              ],
             }),
           });
           await response.text().catch(() => undefined);

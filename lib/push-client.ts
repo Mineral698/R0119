@@ -127,8 +127,11 @@ export async function ensureShellPushChannel(): Promise<{ ok: boolean; error?: s
     if (!isPersonalPushCloudActive()) {
         return { ok: false, error: "请先在本 App 里打开「设置 → 云服务部署」接上个人云（浏览器里配过不算，壳和 Chrome 数据不互通）。" };
     }
-    if (!nativeSynced && !isShellPushBridgeReady()) {
-        return { ok: false, error: "当前安卓壳太旧，没有 configurePush。请重新打包安装 1.1+ 的 APK。" };
+    if (!isShellPushBridgeReady()) {
+        return { ok: false, error: "当前安卓壳太旧，没有 configurePush。请重新打包安装 1.1.2+ 的 APK。" };
+    }
+    if (!nativeSynced) {
+        return { ok: false, error: "未能把个人云地址交给安卓壳。请刷新本页，或重装 1.1.2+ 的 APK。" };
     }
     try {
         syncShellPushNativeConfig();
