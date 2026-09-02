@@ -47,6 +47,12 @@ android {
     kotlinOptions { jvmTarget = '17' }
 }
 
+android.applicationVariants.configureEach { variant ->
+    variant.outputs.configureEach {
+        outputFileName = variant.buildType.name == "debug" ? "FLOAT.apk" : "FLOAT-release.apk"
+    }
+}
+
 dependencies {
     implementation 'androidx.core:core-ktx:1.13.1'
     implementation 'androidx.appcompat:appcompat:1.7.0'
