@@ -82,8 +82,8 @@ true = 单机模式，跳过账号/激活码门禁，用本地账号直接进入
 ### Q: 一键部署说名字被占用了，要删掉以前的「AI Phone Personal Cloud」吗？
 不要删。那就是上次建好的个人云。再贴一次 Access Token 点确认，会更新原来的项目，不会新建。App 数据丢了或换了手机，用同一页的「已经部署过」填回项目地址和 service_role key（Supabase 控制台 Project Settings → API）接上即可。
 
-### Q: 一键部署提示「该账号下没有可用组织」？
-一键部署要的是账号 Access Token（https://supabase.com/dashboard/account/tokens 生成，以 sbp_ 开头），不是项目 Settings → API 里的 service_role / anon。贴错密钥就会读不到组织。已经建过个人云的不要删项目：用同一页「已经部署过」填项目地址和 service_role key；或换一个权限完整的 sbp_ 令牌再试。
+### Q: 一键部署提示「该账号下没有可用组织」或「该项目没有可用的组织」？
+一键部署要的是账号 Access Token（https://supabase.com/dashboard/account/tokens 的 Classic Tokens，以 sbp_ 开头），不是项目 Settings → API 里的 service_role / anon。细粒度/Scoped 令牌经常返回空组织列表，或只看得到项目、看不到组织。已经建过个人云的不要删项目：用同一页「已经部署过」填项目地址和 service_role key。或改用 Classic 令牌；再不行就打开组织页，把地址栏 supabase.com/dashboard/org/ 后面那段 slug 填进部署弹窗。
 
 ### Q: 哪些环境变量不能公开？
 NEXT_PUBLIC_ 开头的变量会打包进浏览器代码、完全公开。Supabase service_role、后台管理密钥、第三方 API 私钥绝不能写进任何 NEXT_PUBLIC_ 变量。
