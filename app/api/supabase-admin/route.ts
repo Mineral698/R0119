@@ -28,9 +28,18 @@ function cleanProjectRef(value: unknown): string {
   return /^[a-z0-9]{16,24}$/.test(raw) ? raw : "";
 }
 
+function asString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function isOrganizationId(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
 function cleanOrganizationSlug(value: unknown): string {
-  const raw = typeof value === "string" ? value.trim() : "";
-  return /^[a-z0-9][a-z0-9_-]{1,79}$/.test(raw) ? raw : "";
+  const raw = asString(value);
+  if (isOrganizationId(raw)) return raw.toLowerCase();
+  return /^[a-z0-9][a-z0-9_-]{1,79}$/i.test(raw) ? raw.toLowerCase() : "";
 }
 
 function cleanRegionCode(value: unknown): "americas" | "emea" | "apac" {
@@ -70,44 +79,117 @@ function asObjectArray(value: unknown): Array<Record<string, unknown>> {
     if (Array.isArray(record.items)) return asObjectArray(record.items);
     if (Array.isArray(record.organizations)) return asObjectArray(record.organizations);
     if (Array.isArray(record.projects)) return asObjectArray(record.projects);
+    if (record.data && typeof record.data === "object") return asObjectArray(record.data);
+    if (asString(record.id) || asString(record.slug) || asString(record.organization_slug) || asString(record.ref)) {
+      return [record];
+    }
   }
   return [];
 }
 
-function parseOrganizations(value: unknown): Array<{ id: string; slug: string; name: string }> {
-  return asObjectArray(value)
-    .map((item) => {
-      const id = typeof item.id === "string" ? item.id.trim() : "";
-      const slug = typeof item.slug === "string" && item.slug.trim() ? item.slug.trim() : id;
-      const name = typeof item.name === "string" && item.name.trim() ? item.name.trim() : slug;
-      return { id, slug, name };
-    })
-    .filter((item) => item.slug);
+type ListedOrganization = { id: string; slug: string; name: string };
+
+function parseOrganization(item: Record<string, unknown>): ListedOrganization | null {
+  const nested = item.organization && typeof item.organization === "object"
+    ? item.organization as Record<string, unknown>
+    : item;
+  const id = asString(nested.id) || asString(item.organization_id);
+  const slug = asString(nested.slug) || asString(item.organization_slug) || id;
+  const name = asString(nested.name) || asString(item.name) || slug;
+  if (!slug) return null;
+  return { id: id || slug, slug, name };
+}
+
+function parseOrganizations(value: unknown): ListedOrganization[] {
+  return asObjectArray(value).map(parseOrganization).filter((item): item is ListedOrganization => Boolean(item));
+}
+
+function parseProject(item: Record<string, unknown>): ListedProject {
+  const nested = item.organization && typeof item.organization === "object"
+    ? item.organization as Record<string, unknown>
+    : null;
+  return {
+    ref: asString(item.ref) || asString(item.id),
+    name: asString(item.name),
+    organizationId: asString(item.organization_id) || asString(nested?.id),
+    organizationSlug: asString(item.organization_slug) || asString(nested?.slug),
+  };
+}
+
+function mergeOrganizations(groups: ListedOrganization[][]): ListedOrganization[] {
+  const merged = new Map<string, ListedOrganization>();
+  const remember = (org: ListedOrganization) => {
+    if (org.id) merged.set(org.id, org);
+    if (org.slug) merged.set(org.slug, org);
+  };
+  for (const group of groups) {
+    for (const org of group) {
+      const prev = (org.id && merged.get(org.id)) || merged.get(org.slug);
+      if (!prev) {
+        remember(org);
+        continue;
+      }
+      remember({
+        id: prev.id || org.id,
+        slug: prev.slug && prev.slug !== prev.id ? prev.slug : org.slug,
+        name: prev.name && prev.name !== prev.slug ? prev.name : org.name,
+      });
+    }
+  }
+  return [...new Map([...merged.values()].map((org) => [org.id || org.slug, org])).values()];
+}
+
+function organizationsFromProjects(projects: ListedProject[]): ListedOrganization[] {
+  return mergeOrganizations(projects.map((project) => {
+    const slug = project.organizationSlug || project.organizationId;
+    if (!slug) return [];
+    return [{
+      id: project.organizationId || slug,
+      slug,
+      name: project.organizationSlug || project.organizationId || slug,
+    }];
+  }));
 }
 
 async function listManagementProjects(token: string): Promise<ListedProject[]> {
   const response = await managementFetch(token, "/projects");
   if (!response.ok) return [];
   const data = await response.json().catch(() => null);
-  return asObjectArray(data)
-    .map((item) => ({
-      ref: typeof item.ref === "string" ? item.ref : typeof item.id === "string" ? item.id : "",
-      name: typeof item.name === "string" ? item.name : "",
-      organizationId: typeof item.organization_id === "string" ? item.organization_id : "",
-      organizationSlug: typeof item.organization_slug === "string" ? item.organization_slug : "",
-    }))
+  const listed = asObjectArray(data)
+    .map(parseProject)
     .filter((item) => cleanProjectRef(item.ref));
+  const missingSlug = listed.filter((project) => !project.organizationSlug).slice(0, 8);
+  if (missingSlug.length === 0) return listed;
+  const details = await Promise.all(missingSlug.map(async (project) => {
+    const detail = await managementFetch(token, `/projects/${project.ref}`);
+    if (!detail.ok) return project;
+    const body = await detail.json().catch(() => null);
+    if (!body || typeof body !== "object") return project;
+    const parsed = parseProject(body as Record<string, unknown>);
+    return {
+      ...project,
+      name: project.name || parsed.name,
+      organizationId: parsed.organizationId || project.organizationId,
+      organizationSlug: parsed.organizationSlug || project.organizationSlug,
+    };
+  }));
+  const byRef = new Map(details.map((project) => [project.ref, project]));
+  return listed.map((project) => byRef.get(project.ref) || project);
 }
 
-async function findExistingPersonalCloud(token: string, organizationSlug: string): Promise<string> {
+async function findExistingPersonalCloud(token: string, organizationSlug = ""): Promise<string> {
   const named = (await listManagementProjects(token))
     .filter((project) => project.name === PERSONAL_CLOUD_PROJECT_NAME);
-  const match = named.find((project) => (
-    project.organizationSlug === organizationSlug
-    || project.organizationId === organizationSlug
-  )) || (named.length === 1 ? named[0] : undefined);
-  return match?.ref || "";
+  const match = organizationSlug
+    ? named.find((project) => (
+      project.organizationSlug === organizationSlug
+      || project.organizationId === organizationSlug
+    ))
+    : undefined;
+  return match?.ref || (named.length === 1 ? named[0].ref : "") || (named[0]?.ref || "");
 }
+
+const NO_ORG_HELP = "该项目/令牌没有可用的组织。细粒度/Scoped 令牌经常读不到组织列表：请到 https://supabase.com/dashboard/account/tokens 用 Classic Tokens 再生成一把 sbp_。已经建过「AI Phone Personal Cloud」的不要删项目，用本页「已经部署过」填项目地址和 service_role。也可以打开组织页，把地址栏 supabase.com/dashboard/org/ 后面那段填进部署弹窗。";
 
 async function handleOrganizations(token: string): Promise<NextResponse> {
   if (!token.startsWith("sbp_")) {
@@ -120,9 +202,21 @@ async function handleOrganizations(token: string): Promise<NextResponse> {
     managementFetch(token, "/organizations"),
     listManagementProjects(token),
   ]);
-  const organizations = orgResponse.ok ? parseOrganizations(await orgResponse.json().catch(() => null)) : [];
-  const orgError = orgResponse.ok ? undefined : await upstreamMessage(orgResponse);
-  // 组织列表为空或无权限时，仍把项目列表交给前端：已有「AI Phone Personal Cloud」可直接更新。
+  const listedOrgs = orgResponse.ok ? parseOrganizations(await orgResponse.json().catch(() => null)) : [];
+  const derivedOrgs = organizationsFromProjects(projects);
+  const missingNames = derivedOrgs.filter((org) => org.name === org.slug || org.name === org.id).slice(0, 6);
+  const fetchedOrgs = await Promise.all(missingNames.map(async (org) => {
+    const response = await managementFetch(token, `/organizations/${encodeURIComponent(org.slug || org.id)}`);
+    if (!response.ok) return org;
+    return parseOrganizations(await response.json().catch(() => null))[0] || org;
+  }));
+  const organizations = mergeOrganizations([listedOrgs, derivedOrgs, fetchedOrgs]);
+  const orgError = !orgResponse.ok
+    ? await upstreamMessage(orgResponse)
+    : organizations.length === 0
+      ? NO_ORG_HELP
+      : undefined;
+  // 组织列表为空或无权限时，仍把项目列表和组织反推结果交给前端。
   return NextResponse.json({ ok: true, organizations, projects, orgError });
 }
 
@@ -136,34 +230,69 @@ async function handleCreateProject(
     return NextResponse.json({ ok: true, projectRef: existing, reused: true });
   }
 
+  const projects = await listManagementProjects(token);
+  const fromProject = projects.find((project) => (
+    project.organizationSlug === organizationSlug
+    || project.organizationId === organizationSlug
+  ));
+  const organizationId = isOrganizationId(organizationSlug)
+    ? organizationSlug
+    : fromProject?.organizationId || "";
+  const slug = !isOrganizationId(organizationSlug)
+    ? organizationSlug
+    : fromProject?.organizationSlug || organizationSlug;
+
   // 只为创建请求生成一次，既不返回浏览器也不持久化。应用后续通过项目密钥工作，
   // 用户若需要直连数据库，可在自己的 Supabase Dashboard 中重设数据库密码。
   const dbPass = `${randomBytes(36).toString("base64url")}Aa1!`;
-  const response = await managementFetch(token, "/projects", {
-    method: "POST",
-    body: JSON.stringify({
+  const bodies: Array<Record<string, unknown>> = [
+    {
       name: PERSONAL_CLOUD_PROJECT_NAME,
-      organization_slug: organizationSlug,
+      organization_slug: slug,
+      ...(organizationId ? { organization_id: organizationId } : {}),
       db_pass: dbPass,
       region_selection: { type: "smartGroup", code: regionCode },
-    }),
-  });
-  if (!response.ok) {
-    const message = await upstreamMessage(response);
-    const reused = await findExistingPersonalCloud(token, organizationSlug);
-    if (reused) return NextResponse.json({ ok: true, projectRef: reused, reused: true });
-    return NextResponse.json({ ok: false, error: message }, { status: response.status });
+    },
+  ];
+  if (organizationId && organizationId !== slug) {
+    bodies.push({
+      name: PERSONAL_CLOUD_PROJECT_NAME,
+      organization_id: organizationId,
+      db_pass: dbPass,
+      region_selection: { type: "smartGroup", code: regionCode },
+    });
   }
-  const data = await response.json() as { id?: unknown; ref?: unknown; status?: unknown };
-  const projectRef = typeof data.ref === "string" ? data.ref : typeof data.id === "string" ? data.id : "";
-  if (!cleanProjectRef(projectRef)) {
-    return NextResponse.json({ ok: false, error: "Supabase 已创建项目，但没有返回有效的项目标识。" }, { status: 502 });
+
+  let lastMessage = "";
+  let lastStatus = 502;
+  for (const body of bodies) {
+    const response = await managementFetch(token, "/projects", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    if (response.ok) {
+      const data = await response.json() as { id?: unknown; ref?: unknown; status?: unknown };
+      const projectRef = typeof data.ref === "string" ? data.ref : typeof data.id === "string" ? data.id : "";
+      if (!cleanProjectRef(projectRef)) {
+        return NextResponse.json({ ok: false, error: "Supabase 已创建项目，但没有返回有效的项目标识。" }, { status: 502 });
+      }
+      return NextResponse.json({
+        ok: true,
+        projectRef,
+        status: typeof data.status === "string" ? data.status : "",
+      });
+    }
+    lastStatus = response.status;
+    lastMessage = await upstreamMessage(response);
   }
+  const reused = await findExistingPersonalCloud(token, organizationSlug);
+  if (reused) return NextResponse.json({ ok: true, projectRef: reused, reused: true });
   return NextResponse.json({
-    ok: true,
-    projectRef,
-    status: typeof data.status === "string" ? data.status : "",
-  });
+    ok: false,
+    error: /organi[sz]ation/i.test(lastMessage)
+      ? `${lastMessage} ${NO_ORG_HELP}`
+      : lastMessage,
+  }, { status: lastStatus });
 }
 
 async function handleProjectStatus(token: string, projectRef: string): Promise<NextResponse> {
@@ -215,22 +344,33 @@ async function handleAssertDedicatedProject(token: string, projectRef: string): 
   return NextResponse.json({ ok: true });
 }
 
+function revealedKey(row: Record<string, unknown>): string {
+  return asString(row.api_key) || asString(row.key) || asString(row.secret) || asString(row.value);
+}
+
 async function handleApiKeys(token: string, projectRef: string): Promise<NextResponse> {
   const response = await managementFetch(token, `/projects/${projectRef}/api-keys?reveal=true`);
   if (!response.ok) {
-    return NextResponse.json({ ok: false, error: await upstreamMessage(response) }, { status: response.status });
+    return NextResponse.json({
+      ok: false,
+      error: `${await upstreamMessage(response)}。读不到密钥时，请到 Dashboard → Project Settings → API 复制 service_role，用本页「已经部署过」填上。细粒度令牌需要勾选 api_gateway_keys_read。`,
+    }, { status: response.status });
   }
-  const data = await response.json() as Array<{ name?: unknown; api_key?: unknown; type?: unknown }>;
-  const rows = Array.isArray(data) ? data : [];
-  const pick = (predicate: (row: { name?: unknown; type?: unknown }) => boolean): string => {
-    const row = rows.find((item) => predicate(item) && typeof item.api_key === "string" && item.api_key.trim());
-    return row && typeof row.api_key === "string" ? row.api_key.trim() : "";
+  const rows = asObjectArray(await response.json().catch(() => null));
+  const pick = (predicate: (row: Record<string, unknown>) => boolean): string => {
+    const row = rows.find((item) => predicate(item) && revealedKey(item));
+    return row ? revealedKey(row) : "";
   };
   // 旧版项目返回 name=service_role 的 JWT key；新版密钥体系是 type=secret 的 sb_secret_ key。
-  const serviceRoleKey = pick((row) => row.name === "service_role") || pick((row) => row.type === "secret");
+  const serviceRoleKey = pick((row) => asString(row.name) === "service_role")
+    || pick((row) => asString(row.type) === "secret")
+    || pick((row) => asString(row.type) === "legacy" && /service/i.test(asString(row.name)));
   if (!serviceRoleKey) {
     return NextResponse.json(
-      { ok: false, error: "该项目没有可用的 service_role/secret key，请改用手动填写。" },
+      {
+        ok: false,
+        error: "该项目没有可用的 service_role/secret key。请到 Dashboard → Project Settings → API 复制，用本页「已经部署过」手动接上。不要删掉「AI Phone Personal Cloud」。细粒度令牌还要勾选 api_gateway_keys_read。",
+      },
       { status: 404 },
     );
   }
@@ -263,7 +403,11 @@ export async function POST(request: Request): Promise<NextResponse> {
     if (payload.action === "organizations") return await handleOrganizations(token);
     if (payload.action === "create_project") {
       const organizationSlug = cleanOrganizationSlug(payload.organizationSlug);
-      if (!organizationSlug) return NextResponse.json({ ok: false, error: "组织标识不合法。" }, { status: 400 });
+      if (!organizationSlug) {
+        const reused = await findExistingPersonalCloud(token);
+        if (reused) return NextResponse.json({ ok: true, projectRef: reused, reused: true });
+        return NextResponse.json({ ok: false, error: NO_ORG_HELP }, { status: 400 });
+      }
       return await handleCreateProject(token, organizationSlug, cleanRegionCode(payload.regionCode));
     }
 

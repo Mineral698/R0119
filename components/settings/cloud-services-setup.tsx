@@ -50,7 +50,40 @@ function noOrganizationHelp(token: string, orgError?: string): string {
         return "请粘贴账号 Access Token（以 sbp_ 开头）。项目 Settings → API 里的 service_role / anon 不能用来一键部署。已经建过「AI Phone Personal Cloud」的不要删项目，点本页「已经部署过」填项目地址和 service_role key。";
     }
     const extra = orgError ? `\n（接口返回：${orgError}）` : "";
-    return `这个 Access Token 读不到组织。细粒度/Scoped 令牌经常这样，请改用 Classic Tokens 再生成一把 sbp_。已经建过个人云的不要删，用本页「已经部署过」接上即可。${extra}`;
+    return `该项目/令牌没有可用的组织。细粒度/Scoped 令牌经常这样，请到令牌页用 Classic Tokens 再生成一把 sbp_。已经建过个人云的不要删，用本页「已经部署过」接上即可。${extra}`;
+}
+
+function organizationsFromProjects(projects: ProjectOption[]): OrganizationOption[] {
+    return mergeOrganizationOptions([], projects.flatMap((project) => {
+        const slug = project.organizationSlug || project.organizationId;
+        if (!slug) return [];
+        return [{
+            id: project.organizationId || slug,
+            slug,
+            name: project.organizationSlug || project.organizationId || slug,
+        }];
+    }));
+}
+
+function mergeOrganizationOptions(listed: OrganizationOption[], derived: OrganizationOption[]): OrganizationOption[] {
+    const merged = new Map<string, OrganizationOption>();
+    const remember = (org: OrganizationOption) => {
+        if (org.id) merged.set(org.id, org);
+        if (org.slug) merged.set(org.slug, org);
+    };
+    for (const org of [...listed, ...derived]) {
+        const prev = (org.id && merged.get(org.id)) || merged.get(org.slug);
+        if (!prev) {
+            remember(org);
+            continue;
+        }
+        remember({
+            id: prev.id || org.id,
+            slug: prev.slug && prev.slug !== prev.id ? prev.slug : org.slug,
+            name: prev.name && prev.name !== prev.slug ? prev.name : org.name,
+        });
+    }
+    return [...new Map([...merged.values()].map((org) => [org.id || org.slug, org])).values()];
 }
 
 function normalizeOrgSlug(value: string): string {
@@ -154,8 +187,11 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                     projects?: ProjectOption[];
                     orgError?: string;
                 }>({ action: "organizations", token });
-                const listedOrgs = Array.isArray(data.organizations) ? data.organizations : [];
                 const listedProjects = Array.isArray(data.projects) ? data.projects : [];
+                const listedOrgs = mergeOrganizationOptions(
+                    Array.isArray(data.organizations) ? data.organizations : [],
+                    organizationsFromProjects(listedProjects),
+                );
                 const dedicated = listedProjects.filter(project => isDedicatedPersonalCloud(project.name));
                 const fallbackProject = dedicated[0] || (listedProjects.length === 1 ? listedProjects[0] : undefined);
                 setOrganizations(listedOrgs);
@@ -595,7 +631,7 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                                 <div className="menu-desc !mt-0 rounded-[14px] bg-black/[0.03] px-3 py-2.5">
                                     将新建独立的「{PERSONAL_CLOUD_PROJECT_NAME}」项目。若这个组织里已经有同名项目，会直接更新它，不用删旧的。
                                     {organizations.length === 0
-                                        ? " 细粒度令牌经常读不到组织：改用 Classic Tokens，或下面手填组织 slug；已经建过的点取消后用「已经部署过」。"
+                                        ? " 若提示「该项目没有可用的组织」，多半是细粒度令牌读不到组织：改用 Classic Tokens，或下面手填组织 slug；已经建过的点取消后用「已经部署过」。"
                                         : ""}
                                 </div>
                             ) : (
@@ -611,7 +647,7 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                                         onChange={(e) => {
                                             const slug = e.target.value;
                                             setSelectedOrganizationSlug(slug);
-                                            const org = organizations.find(item => item.slug === slug);
+                                            const org = organizations.find(item => item.slug === slug || item.id === slug);
                                             const existing = org
                                                 ? projects.find(project => (
                                                     isDedicatedPersonalCloud(project.name)
@@ -623,19 +659,31 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                                     >
                                         <option value="" disabled>请选择…</option>
                                         {organizations.map(org => (
-                                            <option key={org.slug} value={org.slug}>
+                                            <option key={org.id || org.slug} value={org.slug}>
                                                 {org.name || org.slug}
                                             </option>
                                         ))}
                                     </Select>
                                 </label>
                             )}
-                            {!selectedRef && organizations.length === 0 && (
+                            {!selectedRef && (
                                 <label className="flex flex-col gap-1">
-                                    <span className="menu-desc !mt-0">组织 slug（打开组织后，地址栏 supabase.com/dashboard/org/后面那一段，也可整段粘贴）</span>
+                                    <span className="menu-desc !mt-0">
+                                        {organizations.length === 0
+                                            ? "该项目没有可用的组织时，手填组织 slug（打开组织后，地址栏 supabase.com/dashboard/org/ 后面那一段，也可整段粘贴）"
+                                            : "列表不对？手填组织 slug（supabase.com/dashboard/org/ 后面那段）"}
+                                    </span>
                                     <Input
                                         value={selectedOrganizationSlug}
-                                        onChange={(e) => setSelectedOrganizationSlug(normalizeOrgSlug(e.target.value))}
+                                        onChange={(e) => {
+                                            const slug = normalizeOrgSlug(e.target.value);
+                                            setSelectedOrganizationSlug(slug);
+                                            const existing = projects.find(project => (
+                                                isDedicatedPersonalCloud(project.name)
+                                                && (project.organizationId === slug || project.organizationSlug === slug)
+                                            ));
+                                            setSelectedRef(existing?.ref || "");
+                                        }}
                                         placeholder="xxxxxxxxxxxxxxxx"
                                         spellCheck={false}
                                     />
