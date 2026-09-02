@@ -24,7 +24,7 @@ import {
     syncAllWeixinBotRuntimesToCloud,
 } from "@/lib/weixin-cloud-sync";
 import { connectPersonalPushCloud, deployPersonalPushCloud, isPersonalPushCloudActive } from "@/lib/personal-push-cloud";
-import { ensurePersonalPushSubscription, getOfflinePushState, isShellEnvironment, markAccountPushSubscribed } from "@/lib/push-client";
+import { ensurePersonalPushSubscription, getOfflinePushState, installShellPushNativeSync, isShellEnvironment, markAccountPushSubscribed, syncShellPushNativeConfig } from "@/lib/push-client";
 import { getWeixinCloudDeployedAt, markWeixinCloudDeployed, savePushCloudScheduled, saveWeixinCloudScheduled } from "@/lib/cloud-deploy-status";
 import { Input, Select } from "@/components/ui/form";
 
@@ -145,14 +145,16 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
     const [resultDialog, setResultDialog] = useState<{ title: string; text: string } | null>(null);
     const [progress, setProgress] = useState("");
     // 换设备重连：填部署时的项目地址 + service_role key，探测既有云服务并恢复本机状态
-    const [connectOpen, setConnectOpen] = useState(false);
     const [connectUrl, setConnectUrl] = useState("");
     const [connectKey, setConnectKey] = useState("");
 
     useEffect(() => {
-        setCloudReady(isCloudBackupConfigured(loadCloudBackupConfig()));
+        const config = loadCloudBackupConfig();
+        setCloudReady(isCloudBackupConfigured(config));
         setPushActive(isPersonalPushCloudActive());
         setWeixinDeployed(Boolean(getWeixinCloudDeployedAt()));
+        setConnectUrl(normalizeBackupUrl(config.url));
+        setConnectKey(config.key || "");
     }, []);
 
     const configuredUrl = normalizeBackupUrl(loadCloudBackupConfig().url);
@@ -363,15 +365,7 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
         }
     };
 
-    const openConnectDialog = () => {
-        if (busy) return;
-        const config = loadCloudBackupConfig();
-        setConnectUrl(normalizeBackupUrl(config.url));
-        setConnectKey(config.key || "");
-        setConnectOpen(true);
-    };
-
-    /** 换设备重连：零 Access Token、零重新部署。逐项探测既有云服务并恢复本机状态。 */
+    /** 换设备 / 安卓壳重连：零 Access Token、零重新部署。逐项探测既有云服务并恢复本机状态。 */
     const runConnect = async () => {
         if (busy) return;
         setBusy("connect");
@@ -388,6 +382,8 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
             const test = await testCloudBackupConnection(nextConfig);
             if (!test.ok) throw new Error(`云备份连接失败：${test.error}`);
             saveCloudBackupConfig(nextConfig);
+            installShellPushNativeSync();
+            syncShellPushNativeConfig();
             lines.push("云备份：已连接 ✓");
 
             // ② 离线推送：健康检查通过就地恢复状态，并迁移本设备的推送订阅
@@ -395,8 +391,11 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
             try {
                 const push = await connectPersonalPushCloud();
                 if (push.status === "connected") {
+                    installShellPushNativeSync();
+                    syncShellPushNativeConfig();
+                    const inShell = isShellEnvironment();
                     const pushWasEnabled = await getOfflinePushState() === "on";
-                    if (isShellEnvironment() || pushWasEnabled) {
+                    if (inShell || pushWasEnabled) {
                         const subscription = await ensurePersonalPushSubscription();
                         if (!subscription.ok) {
                             lines.push(`离线推送：已连接 ✓（但本设备订阅注册失败：${subscription.error || "未知错误"}，请到推送设置里重新开启）`);
@@ -409,7 +408,7 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                     }
                     if (push.note) lines.push(`　注意：${push.note}`);
                 } else {
-                    lines.push(`离线推送：未检测到部署${push.error ? `（${push.error}）` : ""}，如需使用请走上方部署流程`);
+                    lines.push(`离线推送：未检测到部署${push.error ? `（${push.error}）` : ""}，如需使用请走下方首次部署`);
                 }
             } catch (err) {
                 lines.push(`离线推送：探测失败（${err instanceof Error ? err.message : String(err)}）`);
@@ -429,10 +428,8 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                 lines.push(`微信接入：探测失败（${err instanceof Error ? err.message : String(err)}）`);
             }
 
-            setConnectOpen(false);
             setResultDialog({ title: "连接完成", text: lines.join("\n") });
         } catch (err) {
-            setConnectOpen(false);
             setResultDialog({
                 title: "连接失败",
                 text: [err instanceof Error ? err.message : String(err), ...lines].join("\n"),
@@ -480,8 +477,47 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
 
     return (
         <div className="flex flex-col gap-4">
-            {/* 中央主按钮：直达令牌页 */}
+            <div className="flex flex-col gap-2 rounded-[18px] bg-black/[0.03] px-3.5 py-3">
+                <span className="menu-label">已经部署过？直接接上</span>
+                <p className="menu-desc !mt-0">
+                    网页或以前配好的「AI Phone Personal Cloud」不要删、不用重新部署。
+                    填同一个项目地址和 service_role（Dashboard → Project Settings → API），安卓壳和换设备都走这里。
+                </p>
+                <label className="flex flex-col gap-1">
+                    <span className="menu-desc !mt-0">Supabase 项目地址</span>
+                    <Input
+                        value={connectUrl}
+                        onChange={(e) => setConnectUrl(e.target.value)}
+                        placeholder="https://xxxx.supabase.co"
+                        spellCheck={false}
+                    />
+                </label>
+                <label className="flex flex-col gap-1">
+                    <span className="menu-desc !mt-0">service_role key</span>
+                    <Input
+                        type="password"
+                        value={connectKey}
+                        onChange={(e) => setConnectKey(e.target.value)}
+                        placeholder="eyJ… 或 sb_secret_…"
+                        spellCheck={false}
+                    />
+                </label>
+                <button
+                    type="button"
+                    className={`ui-btn ui-btn-primary mt-1 ${busy === "connect" ? "is-busy" : ""}`}
+                    onClick={() => void runConnect()}
+                    disabled={Boolean(busy) || !connectUrl.trim() || !connectKey.trim()}
+                >
+                    {busy === "connect"
+                        ? <><Loader2 size={15} className="animate-spin" /> {progress || "连接中…"}</>
+                        : "接上已有个人云"}
+                </button>
+            </div>
+
             <div className="flex flex-col items-center justify-center gap-2 pt-1">
+                <p className="text-[calc(11px*var(--app-text-scale,1))] font-medium text-gray-400">
+                    下面是首次部署或更新云函数，已经接上的不用填
+                </p>
                 <button
                     type="button"
                     className="inline-flex items-center justify-center gap-1.5 rounded-[20px] bg-black px-6 py-2.5 text-sm font-bold text-white shadow-sm transition-all hover:bg-gray-800 hover:shadow-md active:scale-95 focus:outline-none"
@@ -493,7 +529,6 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                 <p className="text-[calc(11px*var(--app-text-scale,1))] font-medium text-gray-400">必须是账号 Access Token（sbp_ 开头），不是项目 API 密钥；只用一次，不保存</p>
             </div>
 
-            {/* token 输入 + 圆形确认钮 */}
             <div className="flex items-center gap-2">
                 <Input
                     type="password"
@@ -513,16 +548,6 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                     {busy === "organizations" ? <Loader2 size={17} className="animate-spin" /> : <Check size={18} strokeWidth={2.2} />}
                 </button>
             </div>
-
-            {/* 换设备重连：云端服务还活着，只是本机丢了连接标记——不需要重新部署 */}
-            <button
-                type="button"
-                className="self-center text-[calc(12px*var(--app-text-scale,1))] font-semibold text-gray-500 underline underline-offset-2 hover:text-gray-700 disabled:opacity-40"
-                onClick={openConnectDialog}
-                disabled={Boolean(busy)}
-            >
-                已经部署过、名字被占用了？不要删项目，点这里接上原来的 →
-            </button>
 
             {/* 三项状态 */}
             <div className="flex flex-col gap-2">
@@ -554,67 +579,6 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                 </div>
             )}
 
-            {/* 换设备重连弹窗 */}
-            {connectOpen && (
-                <div className="modal-overlay" data-ui="modal" onClick={() => { if (busy !== "connect") setConnectOpen(false); }}>
-                    <div
-                        className="modal-dialog"
-                        role="dialog"
-                        aria-modal="true"
-                        aria-label="连接已有云服务"
-                        onClick={(e) => e.stopPropagation()}
-                    >
-                        <div className="modal-body flex flex-col gap-3">
-                            <h3 className="modal-title">连接已有云服务</h3>
-                            <div className="menu-desc !mt-0 rounded-[14px] bg-black/[0.03] px-3 py-2.5">
-                                不要删掉旧的「AI Phone Personal Cloud」。云端项目还在，只是这台手机丢了连接。
-                                填项目地址和 service_role key（Supabase 控制台 Project Settings → API），
-                                一键接上。更省事的做法：关掉这里，用上面的 Access Token 再点确认——会更新原来的项目，不会新建。
-                            </div>
-                            <label className="flex flex-col gap-1">
-                                <span className="menu-desc !mt-0">Supabase 项目地址</span>
-                                <Input
-                                    value={connectUrl}
-                                    onChange={(e) => setConnectUrl(e.target.value)}
-                                    placeholder="https://xxxx.supabase.co"
-                                    spellCheck={false}
-                                />
-                            </label>
-                            <label className="flex flex-col gap-1">
-                                <span className="menu-desc !mt-0">service_role key</span>
-                                <Input
-                                    type="password"
-                                    value={connectKey}
-                                    onChange={(e) => setConnectKey(e.target.value)}
-                                    placeholder="eyJ…"
-                                    spellCheck={false}
-                                />
-                            </label>
-                        </div>
-                        <div className="modal-footer">
-                            <button
-                                type="button"
-                                className="ui-btn ui-btn-outline"
-                                onClick={() => setConnectOpen(false)}
-                                disabled={busy === "connect"}
-                            >
-                                取消
-                            </button>
-                            <button
-                                type="button"
-                                className={`ui-btn ui-btn-primary ${busy === "connect" ? "is-busy" : ""}`}
-                                onClick={() => void runConnect()}
-                                disabled={Boolean(busy) || !connectUrl.trim() || !connectKey.trim()}
-                            >
-                                {busy === "connect"
-                                    ? <><Loader2 size={15} className="animate-spin" /> {progress || "连接中…"}</>
-                                    : "探测并连接"}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
             {/* 部署范围弹窗 */}
             {dialogOpen && (
                 <div className="modal-overlay" data-ui="modal" onClick={() => { if (busy !== "deploy") setDialogOpen(false); }}>
@@ -631,7 +595,7 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                                 <div className="menu-desc !mt-0 rounded-[14px] bg-black/[0.03] px-3 py-2.5">
                                     将新建独立的「{PERSONAL_CLOUD_PROJECT_NAME}」项目。若这个组织里已经有同名项目，会直接更新它，不用删旧的。
                                     {organizations.length === 0
-                                        ? " 若提示「该项目没有可用的组织」，多半是细粒度令牌读不到组织：改用 Classic Tokens，或下面手填组织 slug；已经建过的点取消后用「已经部署过」。"
+                                        ? " 若提示「该项目没有可用的组织」，多半是细粒度令牌读不到组织：改用 Classic Tokens，或下面手填组织 slug；已经建过的关掉这里，用本页上方「接上已有个人云」。"
                                         : ""}
                                 </div>
                             ) : (
