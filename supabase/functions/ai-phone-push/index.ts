@@ -113,15 +113,16 @@ async function broadcastShellNotify(
   payload: Record<string, unknown>,
 ): Promise<boolean> {
   try {
+    const message = { topic: `shellpush:${OWNER_ID}`, event: "notify", payload };
+    // 新旧 Realtime 对 public/private 默认值不一致；两条都发，壳只加了其中一种也能收到。
     const response = await fetch(`${supabaseUrl}/realtime/v1/api/broadcast`, {
       method: "POST",
       headers,
       body: JSON.stringify({
-        messages: [{
-          topic: `shellpush:${OWNER_ID}`,
-          event: "notify",
-          payload,
-        }],
+        messages: [
+          { ...message, private: false },
+          { ...message, private: true },
+        ],
       }),
     });
     await response.text().catch(() => undefined);

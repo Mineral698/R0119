@@ -26,6 +26,8 @@ import {
 import { connectPersonalPushCloud, deployPersonalPushCloud, isPersonalPushCloudActive } from "@/lib/personal-push-cloud";
 import { ensurePersonalPushSubscription, getOfflinePushState, installShellPushNativeSync, isShellEnvironment, markAccountPushSubscribed, syncShellPushNativeConfig } from "@/lib/push-client";
 import { getWeixinCloudDeployedAt, markWeixinCloudDeployed, savePushCloudScheduled, saveWeixinCloudScheduled } from "@/lib/cloud-deploy-status";
+import { hydrateKvDb } from "@/lib/kv-db";
+import { CLOUD_CONFIG_CHANGED_EVENT } from "@/lib/shell-push-bridge";
 import { Input, Select } from "@/components/ui/form";
 
 const SUPABASE_TOKENS_URL = "https://supabase.com/dashboard/account/tokens";
@@ -149,12 +151,27 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
     const [connectKey, setConnectKey] = useState("");
 
     useEffect(() => {
-        const config = loadCloudBackupConfig();
-        setCloudReady(isCloudBackupConfigured(config));
-        setPushActive(isPersonalPushCloudActive());
-        setWeixinDeployed(Boolean(getWeixinCloudDeployedAt()));
-        setConnectUrl(normalizeBackupUrl(config.url));
-        setConnectKey(config.key || "");
+        let cancelled = false;
+        const apply = () => {
+            if (cancelled) return;
+            const config = loadCloudBackupConfig();
+            setCloudReady(isCloudBackupConfigured(config));
+            setPushActive(isPersonalPushCloudActive());
+            setWeixinDeployed(Boolean(getWeixinCloudDeployedAt()));
+            const savedUrl = normalizeBackupUrl(config.url);
+            const savedKey = config.key || "";
+            // IndexedDB 尚未水合时缓存是空的，表单会显示成「没接上」。
+            // 用户已经开始改输入时不要覆盖。
+            setConnectUrl((prev) => prev.trim() ? prev : savedUrl);
+            setConnectKey((prev) => prev.trim() ? prev : savedKey);
+        };
+        apply();
+        void hydrateKvDb().then(apply);
+        window.addEventListener(CLOUD_CONFIG_CHANGED_EVENT, apply);
+        return () => {
+            cancelled = true;
+            window.removeEventListener(CLOUD_CONFIG_CHANGED_EVENT, apply);
+        };
     }, []);
 
     const configuredUrl = normalizeBackupUrl(loadCloudBackupConfig().url);
@@ -498,9 +515,14 @@ export function CloudServicesSetup({ onConfigChanged }: { onConfigChanged?: () =
                         type="password"
                         value={connectKey}
                         onChange={(e) => setConnectKey(e.target.value)}
-                        placeholder="eyJ… 或 sb_secret_…"
+                        placeholder="eyJ…（Project Settings → API → service_role）"
                         spellCheck={false}
                     />
+                    <span className="menu-desc !mt-0">
+                        {connectKey.trim()
+                            ? "已填入本机保存的密钥（密码框会显示圆点）。请用 JWT 那把 service_role（eyJ 开头）；sb_secret_ 新密钥有的项目 Realtime 连不上。"
+                            : "Dashboard → Project Settings → API → service_role。不要填 Access Token（sbp_）。"}
+                    </span>
                 </label>
                 <button
                     type="button"
