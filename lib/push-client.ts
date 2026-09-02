@@ -113,7 +113,7 @@ export function isShellEnvironment(): boolean {
     return hasAndroidShellBridge();
 }
 
-export { isShellPushBridgeReady, installShellPushNativeSync };
+export { isShellPushBridgeReady, installShellPushNativeSync, syncShellPushNativeConfig };
 
 /**
  * 自部署安卓壳：把个人云 Realtime 参数交给原生层，并在个人云登记合成订阅
@@ -127,8 +127,11 @@ export async function ensureShellPushChannel(): Promise<{ ok: boolean; error?: s
     if (!isPersonalPushCloudActive()) {
         return { ok: false, error: "请先在本 App 里打开「设置 → 云服务部署」接上个人云（浏览器里配过不算，壳和 Chrome 数据不互通）。" };
     }
-    if (!nativeSynced && !isShellPushBridgeReady()) {
-        return { ok: false, error: "当前安卓壳太旧，没有 configurePush。请重新打包安装 1.1+ 的 APK。" };
+    if (!isShellPushBridgeReady()) {
+        return { ok: false, error: "当前安卓壳太旧，没有 configurePush。请重新打包安装 1.1.2+ 的 APK。" };
+    }
+    if (!nativeSynced) {
+        return { ok: false, error: "未能把个人云地址交给安卓壳。请刷新本页，或重装 1.1.2+ 的 APK。" };
     }
     try {
         syncShellPushNativeConfig();
@@ -232,7 +235,7 @@ async function subscribeRegistration(
 
 /** 给个人 Supabase 建立独立 SW 订阅；主 PWA 订阅保留给现实桥/快捷指令，互不覆盖。 */
 export async function ensurePersonalPushSubscription(): Promise<{ ok: boolean; error?: string }> {
-    if (isShellEnvironment()) return ensureShellPushChannel();
+    if (isShellEnvironment() || hasAndroidShellBridge()) return ensureShellPushChannel();
     if (!isPersonalPushCloudActive()) return { ok: false, error: "个人离线推送尚未启用。" };
     const registration = await getPersonalPushRegistration(true);
     if (!registration) return { ok: false, error: "个人推送 Service Worker 注册失败。" };
