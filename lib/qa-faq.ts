@@ -80,10 +80,10 @@ true = 单机模式，跳过账号/激活码门禁，用本地账号直接进入
 网站本身不能在国行安卓上走 Web Push。请打包仓库里的安卓壳（android-shell/，GitHub Actions 工作流 Build Android Shell APK，变量 SHELL_SITE_URL 填你的站点），安装 1.1.1+ 后：① **在 App 里**打开设置 → 云服务部署（Chrome 网页里配过的个人云和壳不互通）；已经建过的点「已经部署过」填项目地址和 service_role；② 聊天信息页打开「离线推送与定时消息」，创建「长时间没消息时」或「固定时间后」规则；③ 允许通知、关掉电池优化，点「测试」。通知栏若停在「等待网页下发推送配置」，就是壳还没拿到个人云地址：先在壳内接上个人云，并重新部署网站、重装 1.1.1+ APK。生成在个人云完成，壳负责弹系统通知。详细步骤见仓库 android-shell/README.md。
 
 ### Q: 网页能推送，安卓壳通知栏却显示「等待网页下发推送配置」？
-壳和手机浏览器不是同一份数据。网页版能推，只说明 Chrome 里的个人云是好的。请打开 **App 里**的「设置 → 云服务部署」→「已经部署过」，填同一个项目地址和 service_role。通知应变为「已连接，等待角色消息」。仍不变则重装 1.1.1+ 壳，并确认网站已部署含 configurePush 的版本。
+壳和手机浏览器不是同一份数据。网页版能推，只说明 Chrome 里的个人云是好的。请打开 **App 里**的「设置 → 云服务部署」，用最上方「已经部署过？直接接上」填同一个项目地址和 service_role，不要重新走 Access Token 部署。通知应变为「已连接，等待角色消息」。仍不变则重装 1.1.1+ 壳，并确认网站已部署最新版。
 
 ### Q: 一键部署说名字被占用了，要删掉以前的「AI Phone Personal Cloud」吗？
-不要删。那就是上次建好的个人云。再贴一次 Access Token 点确认，会更新原来的项目，不会新建。App 数据丢了或换了手机，用同一页的「已经部署过」填回项目地址和 service_role key（Supabase 控制台 Project Settings → API）接上即可。
+不要删。那就是上次建好的个人云。安卓壳和换设备都不要重新部署：打开「设置 → 云服务部署」最上方「已经部署过？直接接上」，填回项目地址和 service_role key（Supabase 控制台 Project Settings → API）。只有要更新云函数时才用下面的 Access Token。
 
 ### Q: 一键部署提示「该账号下没有可用组织」或「该项目没有可用的组织」？
 一键部署要的是账号 Access Token（https://supabase.com/dashboard/account/tokens 的 Classic Tokens，以 sbp_ 开头），不是项目 Settings → API 里的 service_role / anon。细粒度/Scoped 令牌经常返回空组织列表，或只看得到项目、看不到组织。已经建过个人云的不要删项目：用同一页「已经部署过」填项目地址和 service_role key。或改用 Classic 令牌；再不行就打开组织页，把地址栏 supabase.com/dashboard/org/ 后面那段 slug 填进部署弹窗。
