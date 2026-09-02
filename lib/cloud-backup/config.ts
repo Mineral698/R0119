@@ -70,6 +70,9 @@ export function saveCloudBackupConfig(config: CloudBackupConfig): void {
     keepCount: clampKeepCount(config.keepCount),
     excludeMedia: config.excludeMedia !== false,
   }));
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("ai-phone-cloud-config-changed"));
+  }
 }
 
 export function isCloudBackupConfigured(config: CloudBackupConfig): boolean {

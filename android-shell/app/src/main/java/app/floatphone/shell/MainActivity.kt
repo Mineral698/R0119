@@ -35,9 +35,63 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         val SITE_URL: String = BuildConfig.SITE_URL
-        const val VERSION = "1.1.0"
+        const val VERSION = "1.1.1"
         /** 来电接听等场景的站内深链（必须以 SITE_URL 开头，否则忽略） */
         const val EXTRA_OPEN_URL = "open_url"
+
+        /**
+         * 从 Dexie/AiPhoneKvDB 取出个人云 URL 与 service_role，调用 AndroidShell.configurePush。
+         * 同时派发 floatshell-ready，让页面侧再同步一次。
+         */
+        private const val READ_PERSONAL_CLOUD_JS = """
+            (function(){
+              try { window.dispatchEvent(new Event('floatshell-ready')); } catch (e) {}
+              function send(url, key) {
+                if (!url || !key || !window.AndroidShell) return;
+                try {
+                  window.AndroidShell.configurePush(JSON.stringify({
+                    supabaseUrl: String(url).replace(/\/+$/, ''),
+                    realtimeKey: String(key).trim(),
+                    userId: 'owner'
+                  }));
+                } catch (e) {}
+              }
+              function fromJson(raw) {
+                try { return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+              }
+              try {
+                var backupLs = fromJson(localStorage.getItem('ai_phone_cloud_backup_config_v1'));
+                var pushLs = fromJson(localStorage.getItem('personal_push_cloud_state_v1'));
+                if (backupLs && backupLs.url && backupLs.key) send((pushLs && pushLs.url) || backupLs.url, backupLs.key);
+              } catch (e) {}
+              try {
+                var req = indexedDB.open('AiPhoneKvDB');
+                req.onsuccess = function() {
+                  try {
+                    var db = req.result;
+                    if (!db.objectStoreNames.contains('entries')) return;
+                    var tx = db.transaction('entries', 'readonly');
+                    var store = tx.objectStore('entries');
+                    var backupReq = store.get('ai_phone_cloud_backup_config_v1');
+                    backupReq.onsuccess = function() {
+                      var pushReq = store.get('personal_push_cloud_state_v1');
+                      pushReq.onsuccess = function() {
+                        function val(row) {
+                          if (!row) return null;
+                          if (typeof row === 'string') return fromJson(row);
+                          if (row.value) return typeof row.value === 'string' ? fromJson(row.value) : row.value;
+                          return null;
+                        }
+                        var backup = val(backupReq.result);
+                        var push = val(pushReq.result);
+                        if (backup && backup.url && backup.key) send((push && push.url) || backup.url, backup.key);
+                      };
+                    };
+                  } catch (e) {}
+                };
+              } catch (e) {}
+            })();
+        """
     }
 
     private lateinit var webView: WebView
@@ -120,6 +174,12 @@ class MainActivity : AppCompatActivity() {
                 return runCatching {
                     startActivity(Intent(Intent.ACTION_VIEW, url)); true
                 }.getOrDefault(true)
+            }
+
+            override fun onPageFinished(view: WebView, url: String) {
+                // 不依赖页面 React：直接从 WebView IndexedDB 读个人云配置并交给 PushService。
+                // 浏览器里配过的云和壳不互通；壳自己的库里有配置即可连上。
+                view.evaluateJavascript(READ_PERSONAL_CLOUD_JS.trimIndent(), null)
             }
         }
 

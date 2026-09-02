@@ -67,8 +67,8 @@ class PushService : Service() {
                     .put("realtimeKey", key)
                     .put("userId", userId)
                     .toString())
-                .apply()
-            instance?.requestReconnect()
+                .commit()
+            instance?.requestReconnect() ?: start(context)
         }
     }
 
@@ -118,8 +118,8 @@ class PushService : Service() {
             reconnectRequested = false
             val config = fetchConfig()
             if (config == null) {
-                updateKeepAlive("等待网页下发推送配置…")
-                sleepSec(60); continue
+                updateKeepAlive("请在本 App 打开设置→云服务部署，接上个人云")
+                sleepSec(8); continue
             }
             updateKeepAlive("已连接，等待角色消息")
             val closedNormally = runSocket(config)
@@ -273,7 +273,7 @@ class PushService : Service() {
                     val payload = msg.optJSONObject("payload") ?: return
                     if (payload.optString("event") != "notify") return
                     val body = payload.optJSONObject("payload") ?: return
-                    val title = body.optString("title").ifEmpty { "小手机" }
+                    val title = body.optString("title").ifEmpty { getString(R.string.app_name) }
                     val text2 = body.optString("body").ifEmpty { "有新消息" }
                     // 来电：全屏来电通知（任何一步失败回落普通通知，主路不受影响）
                     if (body.optString("kind") == "call") {
@@ -344,7 +344,7 @@ class PushService : Service() {
     private fun buildKeepAliveNotification(text: String): Notification =
         NotificationCompat.Builder(this, CH_KEEPALIVE)
             .setSmallIcon(R.drawable.ic_stat)
-            .setContentTitle("小手机")
+            .setContentTitle(getString(R.string.app_name))
             .setContentText(text)
             .setOngoing(true)
             .setContentIntent(contentIntent())

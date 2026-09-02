@@ -16,8 +16,8 @@ android {
         applicationId "app.floatphone.shell"
         minSdk 26
         targetSdk 34
-        versionCode 2
-        versionName "1.1.0"
+        versionCode 3
+        versionName "1.1.1"
         buildConfigField "String", "SITE_URL", "\"${siteUrl}\""
     }
 
@@ -45,6 +45,12 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = '17' }
+}
+
+android.applicationVariants.configureEach { variant ->
+    variant.outputs.configureEach {
+        outputFileName = variant.buildType.name == "debug" ? "FLOAT.apk" : "FLOAT-release.apk"
+    }
 }
 
 dependencies {

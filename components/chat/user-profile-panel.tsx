@@ -1442,7 +1442,7 @@ function OfflinePushSettingsPage({ onBack }: { onBack: () => void }) {
                         </div>
                         <p className="menu-group-desc mx-2">
                             {offlinePushHint || (isShellApp && isSelfHostedModeEnabled() && !personalCloudActive
-                                ? "自部署安卓壳要先完成「设置 → 云服务部署」（勾选离线推送）。部署后角色才能在随机/定时时间主动发消息，杀后台也能弹系统通知。"
+                                ? "自部署安卓壳要先在本 App 里完成「设置 → 云服务部署」（浏览器里配过不算，数据不互通）。通知栏若一直显示等待下发配置，点「已经部署过」填项目地址和 service_role。部署后角色才能在随机/定时时间主动发消息。"
                                 : isShellApp && personalCloudActive && !isShellPushBridgeReady()
                                 ? "网页已连上个人云，但当前安卓壳版本过旧，杀后台后收不到系统通知。请按仓库 android-shell/README 重新打包安装 APK。"
                                 : isShellApp

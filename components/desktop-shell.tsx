@@ -1814,8 +1814,12 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
       void import("@/lib/push-bridge-sync").then(m => m.installBridgeServerSync()).catch(() => undefined);
       // 定时唤醒/经期关怀兜底：切后台时刷新快照预约
       void import("@/lib/push-bailout-client").then(m => m.installScheduledBailoutRefresher()).catch(() => undefined);
-      // 安卓壳：把个人云 Realtime 交给原生长连接，并登记 shell:owner 订阅
-      void import("@/lib/push-client").then(m => m.ensureShellPushChannel()).catch(() => undefined);
+      // 安卓壳：把个人云 Realtime 交给原生长连接，并登记 shell:owner 订阅。
+      // 装同步器后会在可见性变化/原生 page-finished 时重试，避免只尝试一次。
+      void import("@/lib/push-client").then((m) => {
+        m.installShellPushNativeSync();
+        return m.ensureShellPushChannel();
+      }).catch(() => undefined);
     })();
 
     return () => {

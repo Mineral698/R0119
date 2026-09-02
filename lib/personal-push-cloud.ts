@@ -144,6 +144,9 @@ function savePersonalPushState(state: PersonalPushCloudState): void {
   // 一旦管理接口确认个人函数已部署，立即关闭共享任务门控。即使健康检查尚在传播，
   // 也只允许等待个人云，绝不把任务重新送回 Netlify。
   kvSet(PUSH_SUBSCRIPTION_GATE_KEY, JSON.stringify({ subscribed: false, checkedAt: Date.now() }));
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("ai-phone-cloud-config-changed"));
+  }
 }
 
 async function waitForPersonalPushHealth(
