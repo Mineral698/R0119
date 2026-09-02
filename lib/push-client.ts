@@ -10,6 +10,8 @@ import {
 } from "./personal-push-cloud";
 import { isSelfHostedModeEnabled } from "./self-hosting";
 import {
+    hasAndroidShellBridge,
+    installShellPushNativeSync,
     isShellPushBridgeReady,
     SHELL_PUSH_OWNER_ID,
     syncShellPushNativeConfig,
@@ -106,10 +108,12 @@ export async function hasAccountPushSubscription(): Promise<boolean> {
 
 /** 是否运行在安卓壳（FloatShell App）的 WebView 里。壳自带长连接推送通道，不走 Web Push。 */
 export function isShellEnvironment(): boolean {
-    return typeof navigator !== "undefined" && navigator.userAgent.includes("FloatShell/");
+    if (typeof window === "undefined") return false;
+    if (typeof navigator !== "undefined" && navigator.userAgent.includes("FloatShell/")) return true;
+    return hasAndroidShellBridge();
 }
 
-export { isShellPushBridgeReady };
+export { isShellPushBridgeReady, installShellPushNativeSync };
 
 /**
  * 自部署安卓壳：把个人云 Realtime 参数交给原生层，并在个人云登记合成订阅
@@ -118,8 +122,13 @@ export { isShellPushBridgeReady };
  */
 export async function ensureShellPushChannel(): Promise<{ ok: boolean; error?: string }> {
     if (!isShellEnvironment()) return { ok: true };
+    installShellPushNativeSync();
+    const nativeSynced = syncShellPushNativeConfig();
     if (!isPersonalPushCloudActive()) {
-        return { ok: false, error: "请先到「设置 → 云服务部署」部署个人云离线推送。" };
+        return { ok: false, error: "请先在本 App 里打开「设置 → 云服务部署」接上个人云（浏览器里配过不算，壳和 Chrome 数据不互通）。" };
+    }
+    if (!nativeSynced && !isShellPushBridgeReady()) {
+        return { ok: false, error: "当前安卓壳太旧，没有 configurePush。请重新打包安装 1.1+ 的 APK。" };
     }
     try {
         syncShellPushNativeConfig();

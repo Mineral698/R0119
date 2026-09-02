@@ -67,8 +67,8 @@ class PushService : Service() {
                     .put("realtimeKey", key)
                     .put("userId", userId)
                     .toString())
-                .apply()
-            instance?.requestReconnect()
+                .commit()
+            instance?.requestReconnect() ?: start(context)
         }
     }
 
@@ -118,8 +118,8 @@ class PushService : Service() {
             reconnectRequested = false
             val config = fetchConfig()
             if (config == null) {
-                updateKeepAlive("等待网页下发推送配置…")
-                sleepSec(60); continue
+                updateKeepAlive("请在本 App 打开设置→云服务部署，接上个人云")
+                sleepSec(8); continue
             }
             updateKeepAlive("已连接，等待角色消息")
             val closedNormally = runSocket(config)
